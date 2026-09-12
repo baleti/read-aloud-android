@@ -1,0 +1,77 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.local.readaloud">
+
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="34" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application android:label="Read Aloud" android:allowBackup="false" android:usesCleartextTraffic="true" android:icon="@mipmap/ic_launcher">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="Read Aloud">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- The trigger: dictate-android's AssistActivity (the long-press-
+             power action menu) sends this broadcast when "Read Aloud" is
+             tapped there. Exported and permission-less deliberately - it
+             carries no data (the receiver reads whatever app is currently
+             foregrounded itself via the accessibility service, it isn't
+             told), so there's nothing to protect by locking it down, and
+             locking it down would mean coordinating a shared signing key
+             or permission declaration between two independently-built
+             apps for no real benefit. Any app on the device could send
+             this broadcast and trigger a read of the current screen -
+             equivalent in effect to a very slow, screen-reader-shaped
+             version of the volume/brightness broadcasts every app can
+             already send. -->
+        <receiver
+            android:name=".TriggerReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.local.readaloud.action.READ_CURRENT_SCREEN" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".TtsPlaybackService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="false" />
+
+        <!-- Accessibility service: the reader. Needs canPerformGestures
+             (scroll/tap "N more replies" in apps like Reddit whose real
+             content isn't all present as addressable nodes) and
+             canRequestFilterKeyEvents (volume-key skip controls while
+             reading) in addition to the base canRetrieveWindowContent -
+             deliberately NOT canRequestTouchExplorationMode, which is
+             what would hijack normal tap behavior system-wide the way
+             enabling TalkBack does; this service stays completely inert
+             until ReadAloudService explicitly asks it for the current
+             window. Must be enabled by hand in Settings, then
+             Accessibility - no way around that, same as any accessibility
+             service on any Android device (dictate-android's own
+             DictateAccessibilityService has the identical requirement). -->
+        <service
+            android:name=".ReadAloudAccessibilityService"
+            android:label="Read Aloud"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+    </application>
+</manifest>

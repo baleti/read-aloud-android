@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">Lets Read Aloud see the screen you invoked it on (and, for apps like Reddit that need it, scroll or tap "load more" to reach content that is not on screen yet) so it can read it aloud.</string>
+</resources>
