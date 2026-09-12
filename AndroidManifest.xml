@@ -1,7 +1,12 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="dev.local.readaloud">
-
-    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="34" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- package/applicationId now comes from build.gradle's namespace +
+         defaultConfig.applicationId (AGP 8+ convention) - having it here
+         too would conflict. Introducing Gradle at all (2026-09-13) was
+         forced by play-services-mlkit-text-recognition's real dependency
+         graph (Firebase + AndroidX, 15-25+ transitive AARs) - hand-
+         resolving that in the old aapt2/kotlinc/d8 pipeline (build.sh,
+         kept only for reference) was a real, substantial risk of a
+         subtly broken build, not just more typing. See docs/design.md. -->
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />

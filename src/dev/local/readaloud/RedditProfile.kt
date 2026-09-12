@@ -30,14 +30,16 @@ import android.view.accessibility.AccessibilityNodeInfo
  *    but it has never had real content to work with on THIS app to prove
  *    it end to end.
  *
- * When all of that still comes back empty, the last thing this does is
- * call ReadAloudAccessibilityService.captureScreenshot() -- confirmed live
- * to succeed even on this exact screen -- so the capability is proven and
- * ready for whatever reads text out of a bitmap gets built next (an
- * on-device OCR/vision model, or a new host3 endpoint over the same
- * WireGuard tunnel /tts/stream already uses). Deliberately not decided
- * here: which of those is worth the latency/cost is a real design
- * question for the user, not something to guess at 2am (see docs/design.md).
+ * When all of that still comes back empty, this falls back to
+ * ReadAloudAccessibilityService.ocrScreenshot() -- the same
+ * play-services-mlkit-text-recognition library TalkBack itself uses for
+ * exactly this situation (its own `UNLABELLED_VIEW` caption case,
+ * confirmed by reading TalkBack's open-source `OcrController.java` - see
+ * docs/design.md). On-device, no host3 round-trip, nothing leaves the
+ * phone. This is why the project needed Gradle at all: that library's
+ * real transitive dependency graph (Firebase + AndroidX, 15-25+ AARs)
+ * couldn't be hand-integrated into the old aapt2/kotlinc/d8 pipeline
+ * safely.
  */
 object RedditProfile : AppProfile {
     override val packageName: String = "com.reddit.frontpage"
@@ -74,12 +76,14 @@ object RedditProfile : AppProfile {
         }
 
         if (current.sumOf { it.length } < MIN_CHARS_BEFORE_FALLBACKS) {
-            // Every tree-based option exhausted -- see class doc. Prove the
-            // vision-fallback capture path works so the next session can
-            // build straight on it rather than re-discovering it works.
-            val screenshot = service.captureScreenshot()
-            Log.w(TAG, "tree extraction empty; screenshot fallback captured=${screenshot != null} (${screenshot?.width}x${screenshot?.height}) - no OCR/vision wired up yet, see class doc")
-            return emptyList()
+            // Every tree-based option exhausted -- see class doc. The
+            // same fallback TalkBack itself uses for this exact
+            // situation (UNLABELLED_VIEW -> OCR a screenshot crop),
+            // confirmed via its own open-source code.
+            val ocrText = service.ocrScreenshot()
+            Log.i(TAG, "tree extraction empty; OCR fallback got ${ocrText.length} chars")
+            if (ocrText.isBlank()) return emptyList()
+            return ocrText.split("\n").map { it.trim() }.filter { it.isNotBlank() }
         }
 
         seen.addAll(current)

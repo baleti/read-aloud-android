@@ -175,6 +175,20 @@ class ReadAloudAccessibilityService : AccessibilityService() {
         return result
     }
 
+    /** captureScreenshot() + MlKitOcr.recognize() in one call - the actual
+     * last-resort fallback any profile can reach for when the
+     * accessibility tree comes back empty (not just RedditProfile;
+     * whatever unknown app hits this same wall next doesn't need its own
+     * profile written first just to get this far). Returns "" on any
+     * failure, same as MlKitOcr.recognize() itself. */
+    fun ocrScreenshot(): String {
+        val bitmap = captureScreenshot() ?: run {
+            Log.w(TAG, "ocrScreenshot: screenshot capture failed")
+            return ""
+        }
+        return MlKitOcr.recognize(bitmap)
+    }
+
     private fun labelFor(pkg: String): String = try {
         packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
     } catch (_: Exception) {

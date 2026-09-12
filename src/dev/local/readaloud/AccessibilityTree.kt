@@ -62,6 +62,40 @@ object AccessibilityTree {
         return out
     }
 
+    /** Same rule as collectText(), but a leaf's own text gets prefixed
+     * "Label: " when its resource-id (last path segment, e.g.
+     * "sender_name" for "com.google.android.gm:id/sender_name") is a key
+     * in `labelsByResId` - asked for explicitly for Gmail's open-email
+     * screen, where "Subject"/"From" aren't otherwise announced as such
+     * (confirmed live: `subject_and_folder_view` and `sender_name` are
+     * genuinely separate leaf nodes there, unlike the inbox list's rows,
+     * which already read fine as one atomic content-desc and are
+     * untouched by this - a label with no match just falls through to
+     * plain text, same as collectText()). */
+    fun collectTextWithLabels(root: AccessibilityNodeInfo, labelsByResId: Map<String, String>): List<String> {
+        val out = mutableListOf<String>()
+        walkLabeled(root, labelsByResId, out)
+        return dedupeAdjacent(out)
+    }
+
+    private fun walkLabeled(node: AccessibilityNodeInfo, labels: Map<String, String>, out: MutableList<String>) {
+        if (!node.isVisibleToUser) return
+        val desc = node.contentDescription?.toString()?.trim()
+        if (!desc.isNullOrBlank()) {
+            out.add(desc)
+            return
+        }
+        val text = node.text?.toString()?.trim()
+        if (!text.isNullOrBlank()) {
+            val resId = node.viewIdResourceName?.substringAfterLast('/')
+            val label = resId?.let { labels[it] }
+            out.add(if (label != null) "$label: $text" else text)
+        }
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { walkLabeled(it, labels, out) }
+        }
+    }
+
     /** First node (depth-first) whose own text or content-desc matches
      * `predicate` -- used to find "N more replies"-shaped buttons whose
      * exact resource-id/wording is app-specific (see RedditProfile) without

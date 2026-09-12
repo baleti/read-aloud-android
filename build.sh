@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# No Gradle: aapt2 -> kotlinc -> d8 -> apksigner, invoked directly. Works
-# from Termux (where these ship as plain packages) or a normal Linux shell
-# with the Android SDK command-line build-tools installed - override the
-# paths below via environment variables for your own layout, e.g.:
-#   ANDROID_JAR=/opt/android-sdk/platforms/android-34/android.jar \
-#   KOTLIN_STDLIB=/usr/share/kotlin/lib/kotlin-stdlib.jar \
-#   bash build.sh
+# OBSOLETE since 2026-09-13 - kept only as a historical record of how the
+# pre-ML-Kit MVP built. This CANNOT build the project anymore: it has no
+# dependency resolution, and play-services-mlkit-text-recognition's real
+# transitive graph (Firebase + AndroidX, 15-25+ AARs) needs Gradle to
+# resolve at all. Use `JAVA_HOME=/usr/lib/jvm/java-17-openjdk ./gradlew
+# assembleDebug` instead - see docs/design.md's "Build system: Gradle"
+# section for why this project (uniquely among its siblings) needed that.
+#
+# Below is the original no-Gradle approach (aapt2 -> kotlinc -> d8 ->
+# apksigner, invoked directly), preserved for reference:
 set -e
 cd "$(dirname "$0")"
 

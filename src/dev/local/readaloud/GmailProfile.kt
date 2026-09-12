@@ -36,8 +36,18 @@ object GmailProfile : AppProfile {
         "system status information", "manage your email preferences", "privacy policy",
     )
 
+    // Only these two open-email fields need a spoken label at all -- the
+    // inbox list's rows already read fine as one atomic content-desc
+    // ("Unread, Sender, Subject, Snippet") and are untouched by this,
+    // since that content-desc branch returns before resource-id lookup
+    // ever runs (see AccessibilityTree.collectTextWithLabels's own doc).
+    private val FIELD_LABELS = mapOf(
+        "subject_and_folder_view" to "Subject",
+        "sender_name" to "From",
+    )
+
     override fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String> {
-        val all = AccessibilityTree.collectText(root)
+        val all = AccessibilityTree.collectTextWithLabels(root, FIELD_LABELS)
         // "Unsubscribe" legitimately appears once near the top (its own
         // header button, confirmed live) -- only a SECOND occurrence, or
         // any of the platform-name/legal markers at all, counts as the

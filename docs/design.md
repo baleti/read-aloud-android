@@ -113,21 +113,20 @@ it ourselves is the same amount of work as adapting TalkBack's version.
 TTS engine to intercept what it decides to speak) was considered and
 rejected - it would still require enabling TalkBack itself, bringing back
 the exact double-tap-hijack UX problem this project exists to avoid.
-**Not yet integrated** - fetched the actual AAR
-(`play-services-mlkit-text-recognition:19.0.1`, confirmed live: 78KB, zero
-native `.so` files, tiny 2.8KB `classes.jar`) and its POM, which showed a
-real transitive dependency chain (`play-services-base`,
-`play-services-basement`, `play-services-mlkit-text-recognition-common`,
-`com.google.mlkit:common`) - genuine multi-AAR resolution, manifest
-merging, and version reconciliation, exactly what Gradle exists to
-automate and this project's hand-rolled `aapt2`/`kotlinc`/`d8` pipeline
-has no equivalent for. Deliberately not rushed blind at 3am; needs
-careful manual assembly with real verification at each step, not a late-
-night guess that could leave a broken build. `RedditProfile`'s
-`captureScreenshot()` fallback (confirmed live: captures the real
-1080x2400 screen even on this exact opaque thread) is exactly the input
-this OCR step will consume once it's wired up - the missing piece is
-narrowly "run recognition on that bitmap," nothing upstream of it.
+
+**Integrated and confirmed live 2026-09-13** (`MlKitOcr.kt`,
+`ReadAloudAccessibilityService.ocrScreenshot()`) - see the Gradle section
+below for why this needed a real build-system migration first, not just a
+dependency line. Against a genuinely opaque real post screen (same
+`ViewFactoryHolder` wall as above): tree extraction came back empty as
+expected, `MlKitOcr.recognize()` returned 1969 characters of real
+recognized text, and it read aloud correctly end to end (confirmed via a
+real `AudioTrack` reaching `PLAYING`). Logcat also showed Play Services
+dynamically fetching the recognition module on first use
+(`dl-MlkitOcrCommon.optional_*.apk`) - the unbundled variant works exactly
+as documented, no model weights shipped in this app's own APK (9MB total,
+up from ~815KB pre-ML-Kit, entirely from the dependency graph's classes/
+resources, not any bundled model).
 
 *The other path, actually working today:* Reddit's per-post `.rss` feed
 (NOT `.json`, which is blocked outright - confirmed live, 403 even with a
@@ -149,10 +148,15 @@ nesting/depth info the way the real (blocked) JSON tree would have given.
 Good enough for "read me the gist of this thread," not the full nested
 conversation.
 
-So the practical state: **invoking Read Aloud on Reddit via the
-corner-swipe gesture** still hits the accessibility-tree wall pending the
-OCR integration above; **sharing a specific post/thread** already works
-today via the RSS path.
+So the practical state: **both paths work now.** Invoking Read Aloud on
+Reddit via the corner-swipe gesture falls through to OCR and reads
+whatever's genuinely on screen (no comment-tree structure, no reply
+navigation, just what a screenshot shows); sharing a specific post/thread
+gets real comment bodies with author attribution via the `.rss` path
+instead (structured, but capped at ~10 flat comments). Neither replaces
+the other - OCR works on anything currently visible regardless of app,
+`.rss` gives cleaner structure but only for Reddit and only for what you
+explicitly share.
 
 **Outlook** (`com.microsoft.office.outlook`) - `OutlookProfile` is a port
 of GmailProfile's footer-trim approach, but **completely untested** -
@@ -168,6 +172,69 @@ order, trusting whatever the app itself chose to expose. An app that
 needs more than that earns its own profile rather than every unknown app
 risking unbounded automated interaction it was never tested against.
 
+## Build system: Gradle (2026-09-13)
+
+Every sibling app in this family (dictate-android, claude-agents-android,
+newsdigest-android, peeragent-android) deliberately has zero dependencies
+and a hand-rolled `aapt2 -> kotlinc -> d8 -> apksigner` `build.sh` instead
+of Gradle. This project broke that convention on purpose, and only for
+this one reason: `play-services-mlkit-text-recognition`'s real transitive
+graph turned out to be Firebase + AndroidX, not the 4 artifacts its own
+POM alone suggested - fully mapped before deciding anything:
+
+```
+play-services-mlkit-text-recognition
++- play-services-mlkit-text-recognition-common
+|  +- play-services-base, play-services-basement, play-services-tasks
+|  +- com.google.android.odml:image
+|  +- com.google.firebase: firebase-components, firebase-encoders, firebase-encoders-json
+|  +- com.google.android.datatransport: transport-api, transport-backend-cct, transport-runtime
+|  +- com.google.mlkit: common, vision-common, vision-interfaces
++- com.google.mlkit:common
+   +- androidx.appcompat:appcompat (its own large closure: .activity, .fragment, .lifecycle, .drawerlayout, .viewpager, .customview, .savedstate, real resources)
+```
+
+15-25+ AARs once fully resolved, each with its own resources and
+manifest requirements (Firebase components in particular self-register
+via manifest-declared `ContentProvider`s). Hand-merging that many
+AARs' classpaths/resources/manifests with zero tooling for version
+reconciliation or manifest merging - the two things Gradle's Android
+plugin automates - was assessed as genuine risk of a subtly broken build
+(resource ID collisions, a missing Firebase manifest entry causing a
+hard-to-trace runtime crash), not just more typing. The user made the
+call explicitly rather than this being assumed.
+
+What changed, concretely:
+
+- `settings.gradle`, `build.gradle`, `gradle.properties` added at the
+  repo root; `build.sh` kept only as a historical reference for how the
+  pre-Gradle MVP built (it can no longer build this project - it has no
+  way to resolve the dependency above at all).
+- **Flat layout preserved, not restructured** - `AndroidManifest.xml`,
+  `src/`, `res/` stayed exactly where they were (via `sourceSets` in
+  `build.gradle` pointing at them directly) rather than moving everything
+  under the conventional `app/src/main/` - kept git history/paths intact
+  across the migration.
+- `package="..."` removed from `AndroidManifest.xml` - AGP 8+ wants
+  `namespace`/`applicationId` in `build.gradle` instead; having both
+  conflicts.
+- Needed JDK 17 explicitly (`JAVA_HOME=/usr/lib/jvm/java-17-openjdk`) -
+  this host's default `java` is JDK 11, too old for AGP 8.5.
+- The Android SDK checkout at `~/.local/share/android-sdk` only had
+  `platforms/android-34`, no `build-tools` - AGP auto-installs
+  `build-tools;34.0.0` itself given accepted SDK licenses
+  (`~/.local/share/android-sdk/licenses/`, the standard published hash
+  files - same effect as running `sdkmanager --licenses` interactively).
+- `debug.keystore` reused as-is (same file `build.sh` already generated,
+  gitignored same as every sibling app) - a Gradle task
+  (`ensureDebugKeystore`) regenerates it with the identical `keytool`
+  invocation on a clean checkout that doesn't have one yet.
+
+Build now: `JAVA_HOME=/usr/lib/jvm/java-17-openjdk ./gradlew assembleDebug`,
+output at `build/outputs/apk/debug/read-aloud-android-debug.apk` (~9MB,
+up from ~815KB pre-ML-Kit - entirely the dependency graph's classes/
+resources, no native libraries, no bundled OCR model weights).
+
 ## TTS
 
 Streams to the *existing* `newsdigest-server` (`10.10.0.2:8792`,
@@ -181,29 +248,26 @@ not just a direct-trigger test.
 
 ## Open questions for next session
 
-1. **Wire up `play-services-mlkit-text-recognition` for real.** Decided
-   (see Reddit findings above) - same library TalkBack uses, on-device,
-   private, fast (TalkBack's own version felt instant because it crops to
-   just the focused node's bounds and the model is likely already warm).
-   What's left is the actual manual AAR/dependency integration into the
-   no-Gradle build: `play-services-mlkit-text-recognition` itself (78KB,
-   no native code) plus its real transitive chain
-   (`play-services-base`, `play-services-basement`,
-   `play-services-mlkit-text-recognition-common`,
-   `com.google.mlkit:common`) - each needs its classes/resources merged
-   into the build by hand since there's no Gradle here to do it
-   automatically. Do this carefully with a real build+install+test cycle
-   after each AAR added, not all at once.
-2. **`RedditProfile`'s corner-swipe path still needs the OCR step above**
-   to stop being a dead end for "just invoke Read Aloud while already
-   looking at a Reddit thread" (as opposed to deliberately sharing it) -
-   see item 1.
+1. **`ocrScreenshot()` is currently only wired into `RedditProfile`.**
+   Given it's a generic `ReadAloudAccessibilityService` method (not
+   Reddit-specific), consider making it `GenericProfile`'s own fallback
+   too, for whatever next unknown/opaque app comes up - it wouldn't need
+   its own profile written first just to stop being a dead end.
+2. **Word-highlight + live caption overlay**, discussed but not built:
+   for the `.rss`/Share path (full text known upfront, same shape as
+   `newsdigest-android`'s existing `ReadAloudController` word-highlighter)
+   this is cheap and mostly adapting code that already works. For the
+   OCR/corner-swipe path, syncing a highlight to Reddit's *own* scroll
+   position would need repeated OCR per scroll step (real, meaningfully
+   higher CPU/battery cost than the current one-shot-per-invocation use) -
+   preferred approach there is still a caption overlay showing the OCR'd
+   text itself, not trying to drive Reddit's real (still-opaque) scroll.
 3. Reusing the already-authenticated Chromium CDP profile (the one
    `reddit-architecture-bot` drives) to fetch `old.reddit.com`'s
-   server-rendered HTML was also considered as a fully separate,
-   non-accessibility data path for Reddit - superseded by the `.rss`
-   discovery above (no browser automation needed at all), but worth
-   remembering if `.rss` ever also gets locked down the way `.json` was.
+   server-rendered HTML was considered as a fully separate,
+   non-accessibility data path for Reddit - superseded by both the OCR
+   and `.rss` paths above, but worth remembering if `.rss` ever also gets
+   locked down the way `.json` was.
 4. **Outlook** needs a real device/emulator with it installed before
    `OutlookProfile` can be trusted at all.
 5. **Volume-key skip controls** - `canRequestFilterKeyEvents` is
