@@ -77,29 +77,82 @@ heuristic for that, not a real boundary detector - refine it here as new
 false negatives turn up, same as a Firejail profile gets tightened over
 time.
 
-**Reddit** (`com.reddit.frontpage`) - the one genuinely unsolved gap.
-Confirmed live: its Compose content lives entirely behind an
-`androidx.compose.ui.viewinterop.ViewFactoryHolder` node reporting
-`childCount=0` - not hidden or unlabeled, genuinely absent from the
-standard `AccessibilityNodeInfo` tree. Manually enabling TalkBack and
-tapping a paragraph made it speak, which looked like "lazy semantics
-attach on touch" - but every equivalent available to an app was tried and
-none reproduced it: a `dispatchGesture()` tap at the same coordinates,
-toggling system touch-exploration mode on first via `setServiceInfo()`,
-and a direct `ACTION_ACCESSIBILITY_FOCUS` call on the deepest node all
-still came back completely empty. Whatever real touch-exploration does to
-make Compose populate happens at an input-interception layer this app has
-no access to reproduce.
+**Reddit** (`com.reddit.frontpage`) - two separate paths now, because it
+needed both an explanation and a workaround.
 
-`RedditProfile`'s expand-and-scroll loop (click "N more replies", scroll
-the largest scrollable container, dedupe into an order-preserving set) is
-built and should work correctly for apps where the tree is readable at
-all - it has just never had real content on Reddit itself to prove it end
-to end. When every fallback still comes back empty, it calls
-`ReadAloudAccessibilityService.captureScreenshot()` - confirmed live to
-succeed (1080x2400, matching the device) even on this exact screen - and
-returns nothing further. **No OCR/vision step is wired up yet.** That's
-the real open question below.
+*Why the accessibility tree is really empty, confirmed not guessed:* its
+Compose content lives entirely behind an
+`androidx.compose.ui.viewinterop.ViewFactoryHolder` node reporting
+`childCount=0`. Every equivalent an app can use was tried against a real
+open thread and every one came back completely empty: a `dispatchGesture()`
+tap at real coordinates, toggling system touch-exploration mode on via
+`setServiceInfo()`, `flagIncludeNotImportantViews` added to the service
+config, and a direct `ACTION_ACCESSIBILITY_FOCUS` call on the deepest
+node. The user pushed back hard here (correctly) - TalkBack really did
+read a tapped paragraph aloud, so the content is clearly reachable
+*somehow*. Resolved by reading TalkBack's own source (`google/talkback`,
+Apache-2.0, actively maintained): it has a dedicated
+`CaptionNodeType.UNLABELLED_VIEW` case in `ImageCaptioner.java` for
+exactly this situation - a focused node with no real accessible text -
+which crops a screenshot of that node's bounds and runs it through
+`OcrController.java`, a ~443-line wrapper around
+`com.google.android.gms:play-services-mlkit-text-recognition`. TalkBack
+wasn't reading the accessibility tree at all for that content; it was
+silently doing OCR on a screenshot and speaking the result. That fully
+reconciles every measurement above - it doesn't mean this project is
+missing an accessibility capability, it means Reddit's content genuinely
+isn't there and OCR is the documented, Google-sanctioned answer even
+inside Android's own tooling.
+
+**Decision: use the same library (`play-services-mlkit-text-recognition`),
+not TalkBack's code and not a host3 endpoint.** It's Apache-2.0 (copying
+is fine) but there's barely anything to copy - `OcrController.java` is a
+thin wrapper around a public SDK any app can depend on directly, so using
+it ourselves is the same amount of work as adapting TalkBack's version.
+"Orchestrating" the real TalkBack app instead (e.g. becoming the system
+TTS engine to intercept what it decides to speak) was considered and
+rejected - it would still require enabling TalkBack itself, bringing back
+the exact double-tap-hijack UX problem this project exists to avoid.
+**Not yet integrated** - fetched the actual AAR
+(`play-services-mlkit-text-recognition:19.0.1`, confirmed live: 78KB, zero
+native `.so` files, tiny 2.8KB `classes.jar`) and its POM, which showed a
+real transitive dependency chain (`play-services-base`,
+`play-services-basement`, `play-services-mlkit-text-recognition-common`,
+`com.google.mlkit:common`) - genuine multi-AAR resolution, manifest
+merging, and version reconciliation, exactly what Gradle exists to
+automate and this project's hand-rolled `aapt2`/`kotlinc`/`d8` pipeline
+has no equivalent for. Deliberately not rushed blind at 3am; needs
+careful manual assembly with real verification at each step, not a late-
+night guess that could leave a broken build. `RedditProfile`'s
+`captureScreenshot()` fallback (confirmed live: captures the real
+1080x2400 screen even on this exact opaque thread) is exactly the input
+this OCR step will consume once it's wired up - the missing piece is
+narrowly "run recognition on that bitmap," nothing upstream of it.
+
+*The other path, actually working today:* Reddit's per-post `.rss` feed
+(NOT `.json`, which is blocked outright - confirmed live, 403 even with a
+real browser User-Agent, on both listings and individual posts, hours
+apart, so it's a structural block on that path, not a transient rate
+limit) is NOT blocked and returns real comment bodies with author
+attribution. `RedditRssParser.kt` parses it (`android.util.Xml`'s
+built-in `XmlPullParser`, zero new dependencies) and `RedditShareActivity`
+is a second entry point into this app - necessary because there's no way
+to read a post's URL off Reddit's empty accessibility tree, so the
+generic corner-swipe trigger can never know what to fetch. Share a post
+from Reddit's own Share button, pick "Read Aloud", and this fetches and
+reads it instead. Confirmed live end to end: real multi-comment audio
+playback (`description=Reddit thread`, position past 8 seconds and
+climbing). Real, tested limitation: capped at roughly the top ~10
+comments regardless of `?limit=`/`?sort=` query params (both tested,
+identical entry count either way), and it's a flat list - no reply-
+nesting/depth info the way the real (blocked) JSON tree would have given.
+Good enough for "read me the gist of this thread," not the full nested
+conversation.
+
+So the practical state: **invoking Read Aloud on Reddit via the
+corner-swipe gesture** still hits the accessibility-tree wall pending the
+OCR integration above; **sharing a specific post/thread** already works
+today via the RSS path.
 
 **Outlook** (`com.microsoft.office.outlook`) - `OutlookProfile` is a port
 of GmailProfile's footer-trim approach, but **completely untested** -
@@ -128,23 +181,33 @@ not just a direct-trigger test.
 
 ## Open questions for next session
 
-1. **Reddit's vision-fallback step.** The capture works; nothing reads
-   text out of the bitmap yet. Two real options, not decided here on
-   purpose: an on-device OCR/vision model, or a new host3 endpoint over
-   the same WireGuard tunnel (there's no vision-capable inference running
-   on host3 currently - newsdigest-server only has Kokoro/Chatterbox TTS
-   and Whisper STT loaded). Latency and cost tradeoffs are real and
-   worth deciding deliberately rather than guessing at 2am.
-2. **Alternative for Reddit specifically:** this conversation also looked
-   at reusing the already-authenticated Chromium CDP profile (the one
+1. **Wire up `play-services-mlkit-text-recognition` for real.** Decided
+   (see Reddit findings above) - same library TalkBack uses, on-device,
+   private, fast (TalkBack's own version felt instant because it crops to
+   just the focused node's bounds and the model is likely already warm).
+   What's left is the actual manual AAR/dependency integration into the
+   no-Gradle build: `play-services-mlkit-text-recognition` itself (78KB,
+   no native code) plus its real transitive chain
+   (`play-services-base`, `play-services-basement`,
+   `play-services-mlkit-text-recognition-common`,
+   `com.google.mlkit:common`) - each needs its classes/resources merged
+   into the build by hand since there's no Gradle here to do it
+   automatically. Do this carefully with a real build+install+test cycle
+   after each AAR added, not all at once.
+2. **`RedditProfile`'s corner-swipe path still needs the OCR step above**
+   to stop being a dead end for "just invoke Read Aloud while already
+   looking at a Reddit thread" (as opposed to deliberately sharing it) -
+   see item 1.
+3. Reusing the already-authenticated Chromium CDP profile (the one
    `reddit-architecture-bot` drives) to fetch `old.reddit.com`'s
-   server-rendered HTML instead of fighting the app's accessibility tree
-   at all - a completely different, non-accessibility-based data path.
-   Worth weighing against the vision-fallback option above.
-3. **Outlook** needs a real device/emulator with it installed before
+   server-rendered HTML was also considered as a fully separate,
+   non-accessibility data path for Reddit - superseded by the `.rss`
+   discovery above (no browser automation needed at all), but worth
+   remembering if `.rss` ever also gets locked down the way `.json` was.
+4. **Outlook** needs a real device/emulator with it installed before
    `OutlookProfile` can be trusted at all.
-4. **Volume-key skip controls** - `canRequestFilterKeyEvents` is
+5. **Volume-key skip controls** - `canRequestFilterKeyEvents` is
    declared but nothing uses it yet.
-5. Reddit's OAuth API is NOT a viable alternative to either of the above
-   - confirmed via the user's own 2026-08-31 journal entry that new app
+6. Reddit's OAuth API is NOT a viable alternative to any of the above -
+   confirmed via the user's own 2026-08-31 journal entry that new app
    registration on Reddit's developer console has been silently closed.

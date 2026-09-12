@@ -20,12 +20,17 @@ working at all, and per-app findings are in
 - **Generic fallback** and **Gmail** - working, confirmed live end to
   end (long-press-power -> tap "Read Aloud" -> reads the open screen ->
   plays over the existing `newsdigest-server` TTS pipeline).
-- **Reddit** - genuinely unsolved. Its Compose UI is invisible to the
-  standard accessibility tree entirely (not just unlabeled); every
-  fallback tried (synthesized taps, touch-exploration mode, direct
-  accessibility-focus) still comes back empty. A screenshot-capture
-  fallback is wired and proven to work, but nothing reads text out of
-  the image yet - see docs/design.md's open questions.
+- **Reddit** - split into two paths. Sharing a specific post (Reddit's
+  own Share button -> "Read Aloud") works today: fetches the post's
+  `.rss` feed and reads real comment text with author attribution
+  (confirmed live). Invoking Read Aloud via the corner-swipe gesture
+  while just looking at a thread still doesn't work - Reddit's Compose UI
+  is invisible to the standard accessibility tree entirely (confirmed via
+  TalkBack's own open-source code: it OCRs a screenshot for exactly this
+  case). Same fix planned here - `play-services-mlkit-text-recognition`,
+  the identical library TalkBack uses - not yet integrated because it
+  pulls in a real multi-AAR dependency chain this project's no-Gradle
+  build can't resolve automatically. See docs/design.md.
 - **Outlook** - written, **completely untested** (not installed on the
   phone this was built against).
 

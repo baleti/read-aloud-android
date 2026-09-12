@@ -2,14 +2,9 @@ package dev.local.readaloud
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
-import android.content.ServiceConnection
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Handler
-import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -17,7 +12,6 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import org.json.JSONObject
 
 /**
  * The universal base layer (see docs/design.md): on-demand access to
@@ -53,19 +47,6 @@ class ReadAloudAccessibilityService : AccessibilityService() {
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    @Volatile private var ttsService: TtsPlaybackService? = null
-    @Volatile private var bound = false
-
-    private val connection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            ttsService = (binder as TtsPlaybackService.LocalBinder).service()
-            bound = true
-        }
-        override fun onServiceDisconnected(name: ComponentName?) {
-            ttsService = null
-            bound = false
-        }
-    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -122,85 +103,7 @@ class ReadAloudAccessibilityService : AccessibilityService() {
         val text = lines.joinToString("\n").trim()
         if (text.isBlank()) { toast("Nothing readable found on screen"); return }
         toast("Reading ${labelFor(pkg)}…")
-        speak(labelFor(pkg), text)
-    }
-
-    private fun speak(title: String, text: String) {
-        bindService(Intent(this, TtsPlaybackService::class.java), connection, Context.BIND_AUTO_CREATE)
-        var waitedMs = 0
-        while (!bound && waitedMs < 3000) { Thread.sleep(50); waitedMs += 50 }
-        val svc = ttsService ?: run { toast("Couldn't reach the playback service"); return }
-        try {
-            startForegroundService(Intent(this, TtsPlaybackService::class.java))
-        } catch (e: Throwable) {
-            Log.e(TAG, "startForegroundService(TtsPlaybackService) failed", e)
-            toast("Couldn't start playback")
-            try { unbindService(connection) } catch (_: Exception) {}
-            return
-        }
-        svc.startSession(title)
-        val wordCount = text.split(Regex("\\s+")).count { it.isNotBlank() }
-        svc.setEstimatedDuration((wordCount / (160.0 / 60.0) * 1000).toLong())
-        streamToTts(text, svc)
-    }
-
-    /** Connects to /tts/stream and blocks (on this already-background
-     * thread) until the server signals "done" or the connection fails --
-     * WebSocketClient.connect() itself is what blocks, exiting naturally
-     * once ws.close() is called from the "done"/"error" handling below. */
-    private fun streamToTts(text: String, svc: TtsPlaybackService) {
-        val ws = WebSocketClient(
-            Settings.getHost(this),
-            Settings.getTtsPort(this),
-            "/tts/stream",
-            mapOf("X-Peer-Agent" to "1"),
-        )
-        ws.connect(object : WebSocketClient.Listener {
-            private var pendingMeta: JSONObject? = null
-
-            override fun onOpen() {
-                ws.sendText(
-                    JSONObject().apply {
-                        put("text", text)
-                        put("engine", Settings.getTtsEngine(this@ReadAloudAccessibilityService))
-                        Settings.getTtsVoice(this@ReadAloudAccessibilityService)?.let { put("voice", it) }
-                    }.toString(),
-                )
-            }
-
-            override fun onText(msg: String) {
-                val obj = JSONObject(msg)
-                when (obj.optString("type")) {
-                    "sentence" -> pendingMeta = obj
-                    "done" -> { svc.endSession(); ws.close() }
-                    "error" -> {
-                        Log.e(TAG, "server error: ${obj.optString("message")}")
-                        svc.endSession()
-                        ws.close()
-                    }
-                }
-            }
-
-            override fun onBinary(data: ByteArray) {
-                val meta = pendingMeta ?: return
-                val words = mutableListOf<WordTiming>()
-                meta.optJSONArray("words")?.let { arr ->
-                    for (i in 0 until arr.length()) {
-                        val w = arr.getJSONObject(i)
-                        words.add(WordTiming(w.getString("word"), w.getInt("start_ms"), w.getInt("end_ms")))
-                    }
-                }
-                svc.enqueueSentence(meta.getString("text"), words, data, meta.getInt("sample_rate"))
-            }
-
-            override fun onFailure(error: Throwable) { Log.e(TAG, "websocket failed", error) }
-            override fun onClosed() {}
-        })
-
-        // Our job (getting the whole text queued for playback) is done --
-        // TtsPlaybackService now owns playback lifetime independently, same
-        // handoff newsdigest-android's ReadAloudController.unbind() relies on.
-        try { unbindService(connection) } catch (_: Exception) {}
+        TtsSpeaker.speak(this, labelFor(pkg), text)
     }
 
     /** Turns Android's system-wide touch-exploration mode on for the

@@ -21,6 +21,25 @@
             </intent-filter>
         </activity>
 
+        <!-- Reddit's second entry point (see RedditShareActivity's own
+             doc): its accessibility tree is too empty to ever read a
+             post's URL off the screen, so the generic corner-swipe
+             trigger below has no way to know what to fetch. Share a
+             Reddit post/comment, pick "Read Aloud" from the share sheet
+             instead. NoDisplay theme - it shows a Toast and finishes
+             immediately, no visible screen of its own. -->
+        <activity
+            android:name=".RedditShareActivity"
+            android:exported="true"
+            android:label="Read Aloud"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <!-- The trigger: dictate-android's AssistActivity (the long-press-
              power action menu) sends this broadcast when "Read Aloud" is
              tapped there. Exported and permission-less deliberately - it
@@ -55,8 +74,8 @@
              deliberately NOT canRequestTouchExplorationMode, which is
              what would hijack normal tap behavior system-wide the way
              enabling TalkBack does; this service stays completely inert
-             until ReadAloudService explicitly asks it for the current
-             window. Must be enabled by hand in Settings, then
+             until TriggerReceiver calls its own startReading(). Must be
+             enabled by hand in Settings, then
              Accessibility - no way around that, same as any accessibility
              service on any Android device (dictate-android's own
              DictateAccessibilityService has the identical requirement). -->
