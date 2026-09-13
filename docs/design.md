@@ -468,6 +468,39 @@ blockers, not something more retrying fixes. If a Play-certified
 system image or a real device becomes available later, this is worth
 retrying rather than treating as permanently closed.
 
+## Feeder and Chrome: GenericProfile handles both, zero new code (2026-09-13)
+
+Tested two more apps against the existing `GenericProfile` (no
+app-specific profile written for either):
+
+- **Feeder** (RSS reader, no account needed) - a real changelog
+  article read back cleanly: title, source, byline, reading time,
+  body, all correct, no chrome/button noise. Found and fixed one real,
+  generally-applicable bug along the way (see `AccessibilityTree.kt`'s
+  own doc): bulleted list items are two leaf nodes, a bare marker
+  glyph plus the text - the marker was being read as its own line
+  ("bullet point") before every single item. Filtering it helps any
+  app's list content, not just Feeder's.
+- **Chrome** (a real Wikipedia article, no account needed) - the
+  actual article text DOES get read correctly, but only after a large
+  amount of page-chrome noise first (site nav, search, user menu, a
+  promo banner, article tabs) - confirmed live, ~17 lines of chrome
+  before "Android is an operating system developed by Google...".
+  Chrome's accessibility bridge doesn't expose ARIA landmarks
+  (`role="main"` etc.) as a distinguishable node class or id GenericProfile
+  could latch onto to skip straight to content - every node type seen
+  was a generic Android widget class (View/ViewGroup/TextView/...),
+  no landmark signal at all in a plain tree dump. Building a real "find
+  the main content region" heuristic for arbitrary websites is
+  meaningfully more open-ended than any per-app profile written so far
+  (every site's own nav/header markup differs) - left as-is rather than
+  attempted tonight; functional today (the content is genuinely all
+  there and correctly extracted, just after a real preamble), a
+  reasonable candidate for a future profile if this comes up often
+  enough to be worth it specifically (e.g. a `ChromeProfile` that tries
+  landmark roles via `AccessibilityNodeInfo`'s `extras` bundle, which a
+  plain `uiautomator dump` doesn't surface but the live API might).
+
 ## Open questions for next session
 
 1. **`ocrScreenshot()` is currently only wired into `RedditProfile`.**
