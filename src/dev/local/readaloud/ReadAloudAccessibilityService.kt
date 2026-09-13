@@ -48,6 +48,15 @@ class ReadAloudAccessibilityService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    // Bumped by every fresh invocation (a plain tap, or picking a chooser
+    // option) - a profile running a multi-step sequence (GmailProfile's
+    // "read the inbox from the top") checks isSuperseded() after each
+    // step, so a NEW invocation (including the user just tapping Read
+    // Aloud again mid-sequence) cleanly cancels it instead of two
+    // sequences running at once. See cancelCurrentAndBumpGeneration()'s
+    // own doc for why it also stops whatever's currently playing.
+    @Volatile private var sequenceGeneration = 0
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -61,50 +70,116 @@ class ReadAloudAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
 
-    /** Entry point from TriggerReceiver -- runs entirely on a background
-     * thread since it blocks (gesture waits, sleeps between scroll passes,
-     * the websocket read loop) well past what either a BroadcastReceiver
-     * or the main thread should ever be held up for. */
+    /** Entry point from TriggerReceiver -- detects the foreground app and
+     * either shows a mode chooser (ModeChooserActivity, when the profile
+     * offers more than one mode for the CURRENT screen - asked for
+     * explicitly 2026-09-13: Gmail should offer "this email"/"onwards"/
+     * "backwards" when an email is open, but jump straight into reading
+     * the whole inbox from the top with no menu when invoked from the
+     * list) or reads immediately using the profile's only mode. Runs
+     * entirely on a background thread since it blocks (gesture waits,
+     * sleeps between scroll passes, the websocket read loop) well past
+     * what either a BroadcastReceiver or the main thread should ever be
+     * held up for. */
     fun startReading() {
+        val myGeneration = cancelCurrentAndBumpGeneration()
         Thread {
             try {
-                runExtraction()
+                val (pkg, root) = findForegroundWithRetry() ?: run { toast("Couldn't find a screen to read"); return@Thread }
+                val profile = AppProfileRegistry.forPackage(pkg)
+                val modes = try {
+                    profile.modes(root)
+                } catch (e: Exception) {
+                    Log.e(TAG, "modes() crashed", e)
+                    listOf(AppProfile.Mode(AppProfile.DEFAULT_MODE, "Read"))
+                }
+                if (modes.size > 1) {
+                    mainHandler.post { launchModeChooser(pkg, modes) }
+                } else {
+                    readWithMode(pkg, profile, modes.firstOrNull()?.id ?: AppProfile.DEFAULT_MODE, myGeneration)
+                }
             } catch (e: Throwable) {
-                Log.e(TAG, "extraction crashed", e)
+                Log.e(TAG, "startReading crashed", e)
+                toast("Read Aloud hit an error - see logcat")
+            }
+        }.apply { isDaemon = true; name = "ReadAloudDetect"; start() }
+    }
+
+    /** Called by ModeChooserActivity once the user taps an option. */
+    fun startReadingWithMode(pkg: String, mode: String) {
+        val myGeneration = cancelCurrentAndBumpGeneration()
+        Thread {
+            try {
+                readWithMode(pkg, AppProfileRegistry.forPackage(pkg), mode, myGeneration)
+            } catch (e: Throwable) {
+                Log.e(TAG, "startReadingWithMode crashed", e)
                 toast("Read Aloud hit an error - see logcat")
             }
         }.apply { isDaemon = true; name = "ReadAloudExtract"; start() }
     }
 
-    private fun runExtraction() {
-        // The overlay that triggered this (dictate-android's AssistActivity)
-        // may not have finished handing focus back to the real app yet --
-        // same race DictateAccessibilityService's own doc already found and
-        // solved the same way: a short retry loop rather than one fixed delay.
-        var found: Pair<String, AccessibilityNodeInfo>? = null
-        repeat(8) {
-            found = foregroundRoot()
-            if (found != null) return@repeat
-            Thread.sleep(150)
-        }
-        val (pkg, root) = found ?: run { toast("Couldn't find a screen to read"); return }
+    private fun readWithMode(pkg: String, profile: AppProfile, mode: String, generation: Int) {
+        if (isSuperseded(generation)) return
+        // A scripted multi-step mode (Gmail's inbox sequence) handles its
+        // own extraction/navigation/speak calls entirely - nothing left
+        // to do here if it says it took care of `mode`.
+        if (profile.runMode(this, mode, labelFor(pkg))) return
 
-        val profile = AppProfileRegistry.forPackage(pkg)
+        val (_, root) = findForegroundWithRetry() ?: run { toast("Couldn't find a screen to read"); return }
         val lines = try {
             if (profile.needsTouchExploration) {
-                withTouchExplorationMode { profile.extract(this, root) }
+                withTouchExplorationMode { profile.extract(this, root, mode) }
             } else {
-                profile.extract(this, root)
+                profile.extract(this, root, mode)
             }
         } catch (e: Exception) {
             Log.e(TAG, "profile ${profile.javaClass.simpleName} crashed, falling back to generic", e)
-            try { GenericProfile.extract(this, root) } catch (_: Exception) { emptyList() }
+            try { GenericProfile.extract(this, root, mode) } catch (_: Exception) { emptyList() }
         }
         val text = lines.joinToString("\n").trim()
         Log.i(TAG, "extracted ${text.length} chars: ${text.take(300)}${if (text.length > 300) "…" else ""}")
         if (text.isBlank()) { toast("Nothing readable found on screen"); return }
         toast("Reading ${labelFor(pkg)}…")
         TtsSpeaker.speak(this, labelFor(pkg), text)
+    }
+
+    /** The overlay that triggered this (dictate-android's AssistActivity,
+     * or ModeChooserActivity) may not have finished handing focus back to
+     * the real app yet -- same race DictateAccessibilityService's own doc
+     * already found and solved the same way: a short retry loop rather
+     * than one fixed delay. */
+    fun findForegroundWithRetry(): Pair<String, AccessibilityNodeInfo>? {
+        repeat(8) {
+            foregroundRoot()?.let { return it }
+            Thread.sleep(150)
+        }
+        return null
+    }
+
+    /** Bumps the generation counter (synchronously, so a caller on the
+     * main thread - TriggerReceiver.onReceive(), a chooser button tap -
+     * never blocks) and stops whatever TTS session is currently active
+     * in the background - a fresh Read Aloud invocation always starts
+     * clean rather than layering onto whatever was already playing, and
+     * a running multi-step sequence sees isSuperseded() go true on its
+     * next check and stops itself rather than fighting the new one. */
+    fun cancelCurrentAndBumpGeneration(): Int {
+        val next = ++sequenceGeneration
+        Thread { TtsSpeaker.stopCurrent(this) }.apply { isDaemon = true; name = "ReadAloudStopCurrent"; start() }
+        return next
+    }
+
+    fun isSuperseded(generation: Int): Boolean = generation != sequenceGeneration
+    fun currentGeneration(): Int = sequenceGeneration
+
+    private fun launchModeChooser(pkg: String, modes: List<AppProfile.Mode>) {
+        val intent = android.content.Intent(this, ModeChooserActivity::class.java).apply {
+            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra(ModeChooserActivity.EXTRA_PACKAGE, pkg)
+            putStringArrayListExtra(ModeChooserActivity.EXTRA_MODE_IDS, ArrayList(modes.map { it.id }))
+            putStringArrayListExtra(ModeChooserActivity.EXTRA_MODE_LABELS, ArrayList(modes.map { it.label }))
+        }
+        startActivity(intent)
     }
 
     /** Turns Android's system-wide touch-exploration mode on for the
@@ -190,13 +265,13 @@ class ReadAloudAccessibilityService : AccessibilityService() {
         return MlKitOcr.recognize(bitmap)
     }
 
-    private fun labelFor(pkg: String): String = try {
+    fun labelFor(pkg: String): String = try {
         packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
     } catch (_: Exception) {
         pkg
     }
 
-    private fun toast(message: String) {
+    fun toast(message: String) {
         Log.i(TAG, message)
         mainHandler.post { Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show() }
     }

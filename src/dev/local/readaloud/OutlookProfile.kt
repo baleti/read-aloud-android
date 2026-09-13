@@ -29,7 +29,7 @@ object OutlookProfile : AppProfile {
         "manage your subscription", "view this email in your browser",
     )
 
-    override fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String> {
+    override fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo, mode: String): List<String> {
         val all = AccessibilityTree.collectText(root)
         var seenUnsubscribeOnce = false
         val out = mutableListOf<String>()

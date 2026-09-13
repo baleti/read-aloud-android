@@ -52,7 +52,7 @@ object RedditProfile : AppProfile {
     private val MORE_REPLIES = Regex("""\d+\s+more repl""", RegexOption.IGNORE_CASE)
     private val MORE_COMMENTS = Regex("""view more comments""", RegexOption.IGNORE_CASE)
 
-    override fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String> {
+    override fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo, mode: String): List<String> {
         val seen = LinkedHashSet<String>()
 
         var current = AccessibilityTree.collectText(root)

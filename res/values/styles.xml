@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ModeChooserActivity's own theme - same reasoning as dictate-android's
+         TranslucentOverlay (a real translucent window, not just a
+         semi-transparent scrim drawn in code, needed for the previous app
+         to actually show through). -->
+    <style name="TranslucentOverlay" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
+</resources>

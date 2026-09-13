@@ -12,6 +12,12 @@ import android.view.accessibility.AccessibilityNodeInfo
  * changes.
  */
 interface AppProfile {
+    companion object {
+        const val DEFAULT_MODE = "default"
+    }
+
+    data class Mode(val id: String, val label: String)
+
     /** Package this profile handles -- must match a key it's registered
      * under, just kept alongside the implementation for readability. */
     val packageName: String
@@ -27,6 +33,17 @@ interface AppProfile {
      * narrowly-scoped cost rather than the permanent hijack TalkBack causes. */
     val needsTouchExploration: Boolean get() = false
 
+    /** The choices to offer for the CURRENT screen state (asked for
+     * explicitly 2026-09-13: Gmail should offer "this email" / "onwards"
+     * / "backwards" when an email is open, but jump straight into reading
+     * the whole inbox from the top with no menu at all when invoked from
+     * the list, since there's nothing to choose between there). A single-
+     * entry result means ReadAloudAccessibilityService skips the chooser
+     * activity entirely and just runs that one mode - the default for
+     * every profile that doesn't override this, preserving today's
+     * one-tap behavior everywhere except Gmail. */
+    fun modes(root: AccessibilityNodeInfo): List<Mode> = listOf(Mode(DEFAULT_MODE, "Read"))
+
     /** Returns the text to read, in the order it should be spoken.
      * `service` is provided so a profile can drive the screen (click,
      * scroll) via its gesture helpers when the content it wants isn't
@@ -35,7 +52,18 @@ interface AppProfile {
      * profile that scrolls/clicks must re-fetch its own working root via
      * `service.foregroundRoot()` afterward rather than continuing to walk
      * the now-stale node it was first given. */
-    fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String>
+    fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo, mode: String = DEFAULT_MODE): List<String>
+
+    /** For a mode that needs to run a whole scripted sequence itself
+     * (Gmail's "read the inbox from the top": open an email, read it,
+     * navigate back, open the next, repeat) rather than a single
+     * extract-then-speak - handles everything including calling
+     * TtsSpeaker.speak() as many times as it needs to. Returns true if it
+     * handled `mode` completely; false falls back to the normal single
+     * extract() + one TtsSpeaker.speak() call. Default false, since most
+     * modes (including every non-Gmail profile's only mode) are the
+     * simple case. */
+    fun runMode(service: ReadAloudAccessibilityService, mode: String, label: String): Boolean = false
 }
 
 object AppProfileRegistry {

@@ -45,6 +45,24 @@
             </intent-filter>
         </activity>
 
+        <!-- Shown by ReadAloudAccessibilityService itself (not started
+             from dictate-android - it has no way to know in advance
+             whether the foreground app's profile offers more than one
+             mode) when the detected profile has multiple modes for the
+             current screen. taskAffinity=""/singleInstance for the same
+             reason dictate-android's AssistActivity needs them: confirmed
+             live there that without these, a translucent overlay
+             Activity can end up sharing a task with another of this
+             app's own activities and show THAT dimmed behind it instead
+             of the real foreground app. -->
+        <activity
+            android:name=".ModeChooserActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:launchMode="singleInstance"
+            android:theme="@style/TranslucentOverlay" />
+
         <!-- The trigger: dictate-android's AssistActivity (the long-press-
              power action menu) sends this broadcast when "Read Aloud" is
              tapped there. Exported and permission-less deliberately - it

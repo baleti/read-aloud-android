@@ -20,6 +20,6 @@ import android.view.accessibility.AccessibilityNodeInfo
 object GenericProfile : AppProfile {
     override val packageName: String = "*generic*" // never registered under this key -- see AppProfileRegistry
 
-    override fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String> =
+    override fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo, mode: String): List<String> =
         AccessibilityTree.collectText(root)
 }
