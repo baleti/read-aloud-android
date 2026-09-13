@@ -59,7 +59,7 @@ object AccessibilityTree {
             return // atomic announcement -- see class doc, don't also read the children
         }
         val text = node.text?.toString()?.trim()
-        if (!text.isNullOrBlank()) {
+        if (!text.isNullOrBlank() && !isBareListMarker(text)) {
             val resId = node.viewIdResourceName?.substringAfterLast('/')
             val label = resId?.let { labels[it] }
             out.add(if (label != null) "$label: $text" else text)
@@ -107,6 +107,17 @@ object AccessibilityTree {
     // appends the sender's name, which defeats a raw word-count cutoff
     // once the name itself is multiple words.
     private val CHROME_ID_SUBSTRINGS = listOf("button", "badge")
+
+    // Confirmed live 2026-09-13 against Feeder (an RSS reader, tested
+    // with zero app-specific profile - GenericProfile alone) reading a
+    // changelog article: each bulleted line is TWO leaf nodes, a bare
+    // marker glyph on its own plus the actual item text right after -
+    // reading the marker as its own line ("bullet point, bullet point...")
+    // ahead of every single item is real noise on any list-heavy content,
+    // not just this one app.
+    private val BARE_LIST_MARKERS = setOf("•", "◦", "‣", "·", "-", "*")
+
+    private fun isBareListMarker(text: String): Boolean = text in BARE_LIST_MARKERS
 
     private fun isChrome(node: AccessibilityNodeInfo): Boolean {
         val resId = node.viewIdResourceName?.substringAfterLast('/')?.lowercase()
