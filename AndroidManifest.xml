@@ -63,6 +63,17 @@
             android:launchMode="singleInstance"
             android:theme="@style/TranslucentOverlay" />
 
+        <!-- Multi-select follow-up to ModeChooserActivity's "Read
+             selected" option, for a Gmail thread grouping multiple
+             messages into one conversation entry - see its own doc. -->
+        <activity
+            android:name=".MessagePickerActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:launchMode="singleInstance"
+            android:theme="@style/TranslucentOverlay" />
+
         <!-- The trigger: dictate-android's AssistActivity (the long-press-
              power action menu) sends this broadcast when "Read Aloud" is
              tapped there. Exported and permission-less deliberately - it

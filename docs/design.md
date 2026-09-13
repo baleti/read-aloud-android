@@ -463,3 +463,43 @@ report that reintroduces it.
 6. Reddit's OAuth API is NOT a viable alternative to any of the above -
    confirmed via the user's own 2026-08-31 journal entry that new app
    registration on Reddit's developer console has been silently closed.
+
+## Gmail: grouped-conversation "Read all"/"Read selected" (2026-09-13)
+
+Added per an explicit spot: Gmail can bundle several messages into one
+inbox row ("Michael, 6 messages, Re: ..."), and reading it via
+"This email" was just reading whatever happened to be visible - the
+single most-recently-expanded message, not the whole thread. "This
+email" now checks `countMessages()` (an `upper_header`-node count plus
+`super_collapsed_text`'s own digit - see its own doc for why this,
+rather than any of the several per-message id schemes tried and found
+inconsistent, is the one signal that's actually reliable) and, for a
+real multi-message thread, offers a second-level chooser ("Read all" /
+"Read selected") instead of reading immediately. "Read selected" pops
+`MessagePickerActivity` (new, multi-select checkboxes + a confirm
+button, matching the existing chooser's dark theme) built straight from
+`extract()`'s own already-working "From: "/date line output.
+
+**Known limitation, not yet fully solved**: `expandAllMessages()`
+correctly clicks through collapsed messages one at a time (confirmed
+live: real, monotonic progress each iteration, e.g. "12 remaining" ->
+"8 remaining" -> "5 remaining" against the real 6-message test thread),
+but reliably stalls a few messages short of full completion on THIS
+particular thread within emulator testing - `read_selected`'s resulting
+picker showed only 2 of the thread's 6 messages by the time it stopped
+making countable progress, even with three staggered retries (500ms,
+800ms, 1100ms) between checks. Root cause not fully isolated: confirmed
+this is NOT the earlier `item_pager` mis-scroll bug (fixed, verified
+separately), and confirmed real per-click progress does happen (so it's
+not simply "the click doesn't work") - most likely a genuine animation/
+render-settling delay on this specific emulator config (software-
+rendered final composite frames even with `-gpu host`) that occasionally
+exceeds even the longest retry window, compounded by a message low
+enough in a long thread needing an explicit scroll(the `ScrollView`
+fallback) that may itself need a longer settle time than currently
+given. Whatever ships tomorrow morning should be described to the user
+as "usually gets most/all messages, occasionally stops partway on a
+long thread" rather than "fully solved" - worth a fresh pass with more
+generous timing constants, and ideally re-tested on the real phone
+(likely faster/more consistent GPU compositing than this emulator) once
+available, before calling this closed.

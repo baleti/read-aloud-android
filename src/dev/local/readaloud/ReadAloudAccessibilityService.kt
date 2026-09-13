@@ -94,7 +94,7 @@ class ReadAloudAccessibilityService : AccessibilityService() {
                     listOf(AppProfile.Mode(AppProfile.DEFAULT_MODE, "Read"))
                 }
                 if (modes.size > 1) {
-                    mainHandler.post { launchModeChooser(pkg, modes) }
+                    launchModeChooser(pkg, modes)
                 } else {
                     readWithMode(pkg, profile, modes.firstOrNull()?.id ?: AppProfile.DEFAULT_MODE, myGeneration)
                 }
@@ -183,14 +183,35 @@ class ReadAloudAccessibilityService : AccessibilityService() {
     fun isSuperseded(generation: Int): Boolean = generation != sequenceGeneration
     fun currentGeneration(): Int = sequenceGeneration
 
-    private fun launchModeChooser(pkg: String, modes: List<AppProfile.Mode>) {
-        val intent = android.content.Intent(this, ModeChooserActivity::class.java).apply {
-            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            putExtra(ModeChooserActivity.EXTRA_PACKAGE, pkg)
-            putStringArrayListExtra(ModeChooserActivity.EXTRA_MODE_IDS, ArrayList(modes.map { it.id }))
-            putStringArrayListExtra(ModeChooserActivity.EXTRA_MODE_LABELS, ArrayList(modes.map { it.label }))
+    // Non-private: GmailProfile.runMode() (already on its own background
+    // thread) launches a SECOND-level chooser itself for a grouped/
+    // multi-message thread ("this_email" -> Read all / Read selected) -
+    // see its own doc.
+    fun launchModeChooser(pkg: String, modes: List<AppProfile.Mode>) {
+        mainHandler.post {
+            val intent = android.content.Intent(this, ModeChooserActivity::class.java).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(ModeChooserActivity.EXTRA_PACKAGE, pkg)
+                putStringArrayListExtra(ModeChooserActivity.EXTRA_MODE_IDS, ArrayList(modes.map { it.id }))
+                putStringArrayListExtra(ModeChooserActivity.EXTRA_MODE_LABELS, ArrayList(modes.map { it.label }))
+            }
+            startActivity(intent)
         }
-        startActivity(intent)
+    }
+
+    /** Multi-select follow-up to launchModeChooser's "Read selected" -
+     * see MessagePickerActivity's own doc for why this needs a separate
+     * Activity rather than reusing ModeChooserActivity's single-select-
+     * and-dismiss rows. */
+    fun launchMessagePicker(pkg: String, labels: List<String>) {
+        mainHandler.post {
+            val intent = android.content.Intent(this, MessagePickerActivity::class.java).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(MessagePickerActivity.EXTRA_PACKAGE, pkg)
+                putStringArrayListExtra(MessagePickerActivity.EXTRA_LABELS, ArrayList(labels))
+            }
+            startActivity(intent)
+        }
     }
 
     /** Turns Android's system-wide touch-exploration mode on for the

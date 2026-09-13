@@ -136,8 +136,62 @@ object GmailProfile : AppProfile {
         // Called from ReadAloudAccessibilityService.readWithMode(), which
         // is already running on its own background thread - no need for
         // another one here.
+        if (mode.startsWith("read_selected:")) {
+            val indices = mode.removePrefix("read_selected:").split(",").mapNotNull { it.toIntOrNull() }
+            readSelectedMessages(service, indices, label)
+            return true
+        }
         when (mode) {
             "inbox_top" -> runInboxSequence(service, startIndex = 0, direction = 1, label)
+            // Gmail can group several messages into one conversation entry
+            // ("Michael, 6 messages...") - asked for explicitly 2026-09-13
+            // after spotting this exact thread does it. Only pops the
+            // super_collapsed_block (cheap - see expandSuperCollapsedBlocksOnly's
+            // own doc) to get a true message count before deciding: a
+            // single-message thread falls through to the unchanged generic
+            // path below (return false), a real multi-message one gets a
+            // second-level chooser instead of reading immediately.
+            "this_email" -> {
+                val root = service.findForegroundWithRetry(packageName)?.second ?: return false
+                if (countMessages(root) <= 1) return false
+                service.launchModeChooser(
+                    packageName,
+                    listOf(
+                        AppProfile.Mode("read_all", "Read all"),
+                        AppProfile.Mode("read_selected", "Read selected"),
+                    ),
+                )
+            }
+            "read_all" -> {
+                val root = service.findForegroundWithRetry(packageName)?.second
+                if (root == null || !isOpenEmailScreen(root)) { service.toast("No email is open"); return true }
+                val fullyExpanded = expandAllMessages(service, root)
+                val lines = try { extract(service, fullyExpanded, "this_email") } catch (e: Exception) { emptyList() }
+                val text = lines.joinToString("\n").trim()
+                if (text.isBlank()) { service.toast("Nothing readable found on screen"); return true }
+                service.toast("Reading $label…")
+                TtsSpeaker.speak(service, label, text)
+            }
+            "read_selected" -> {
+                val root = service.findForegroundWithRetry(packageName)?.second
+                if (root == null || !isOpenEmailScreen(root)) { service.toast("No email is open"); return true }
+                val fullyExpanded = expandAllMessages(service, root)
+                val lines = try { extract(service, fullyExpanded, "this_email") } catch (e: Exception) { emptyList() }
+                val fromIndices = lines.withIndex().filter { it.value.startsWith("From: ") }.map { it.index }
+                if (fromIndices.isEmpty()) { service.toast("No messages found"); return true }
+                // Label each message "Sender - Date" straight from extract()'s
+                // own output (the line right after "From: ", unlabeled but
+                // reliably the date - see extract()'s own doc) rather than
+                // walking sender_name/upper_date nodes directly - see
+                // countMessages' own doc for why per-message id/structure
+                // lookups turned out not to be trustworthy across sessions.
+                val labels = fromIndices.mapIndexed { i, lineIdx ->
+                    val sender = lines[lineIdx].removePrefix("From: ")
+                    val date = lines.getOrNull(lineIdx + 1)?.takeIf { !it.startsWith("to ") }
+                    listOfNotNull(sender, date).joinToString(" - ").ifBlank { "Message ${i + 1}" }
+                }
+                service.launchMessagePicker(packageName, labels)
+            }
             "onwards", "backwards" -> {
                 val direction = if (mode == "onwards") 1 else -1
                 // ModeChooserActivity may not have finished closing and
@@ -294,6 +348,211 @@ object GmailProfile : AppProfile {
     //     just re-collapse it, so this check matters, not just a
     //     convenience.
     private const val MAX_EXPAND_ITERATIONS = 8
+
+    // Whether a thread's per-message containers carry a stable, globally
+    // unique id ("m#msg-f:<big number>-header") turns out to be
+    // inconsistent - confirmed live 2026-09-13 against the SAME thread
+    // across different app-process lifetimes: sometimes every message
+    // gets that wrapper, sometimes (a genuinely fresh Gmail process,
+    // right after force-stop) NONE of them do and only the plain,
+    // non-unique `upper_header`/`email_snippet`/`recipient_summary` ids
+    // are present at all. An earlier version of this counted/enumerated
+    // messages by that unique id and got a silent, wrong answer (a real
+    // 6-message thread counted as 0 or mislabeled every picker row
+    // "Message N") the moment the id scheme it assumed wasn't the one
+    // actually present. Replaced with two things that don't depend on
+    // any particular id scheme at all:
+    //   - countMessages() below, for the cheap "does this thread need a
+    //     Read all/Read selected chooser at all" decision, using
+    //     `upper_header` (present for every visible message regardless of
+    //     id scheme) plus `super_collapsed_text`'s own digit (Gmail's own
+    //     count of how many messages a block is hiding) - needs no
+    //     clicking/expanding at all to be accurate.
+    //   - readSelectedMessages() below builds its per-message labels
+    //     straight from extract()'s own already-working "From: "/date
+    //     line output instead of walking node containers for
+    //     sender_name/upper_date, for the same reason.
+    private fun countMessages(root: AccessibilityNodeInfo): Int {
+        val visible = AccessibilityTree.findAllNodes(root) { it.viewIdResourceName?.endsWith("upper_header") == true }.size
+        val hidden = AccessibilityTree.findAllNodes(root) { it.viewIdResourceName?.endsWith("super_collapsed_text") == true }
+            .sumOf { it.text?.toString()?.trim()?.toIntOrNull() ?: 0 }
+        return visible + hidden
+    }
+
+    /** Expands EVERY message in an open thread for real "read all"/"read
+     * selected" content - confirmed live 2026-09-13 against a real
+     * 6-message thread that expandCollapsedMessages() (below, kept for
+     * the single-message extract() path) silently drops messages a
+     * super_collapsed_block materializes: those can render with a
+     * per-message unique id ("m#msg-f:<id>-header") that has NO text,
+     * content-desc, or children at all until clicked - completely unlike
+     * the ORIGINAL two visible collapsed cards, which expose a real
+     * `email_snippet` expandCollapsedMessages() knows to look for. Since
+     * that function's loop only ever searches for `email_snippet`, it
+     * finds nothing left once those are gone and stops - even though 3 of
+     * this thread's 6 messages were never expanded at all, with no error
+     * or signal that anything was missed. This loop instead checks for
+     * EITHER collapsed signal every iteration (unaffected by which one a
+     * given thread/session happens to use - see countMessages' own doc
+     * for why relying on one specific id scheme already broke once) and
+     * keeps going until neither is found anywhere in the tree.
+     *
+     * Also confirmed live: a message further down a long thread can have
+     * empty on-screen bounds (Gmail's RecyclerView-style lazy layout
+     * hasn't measured an off-screen item yet, same shape of problem
+     * RedditProfile's own scroll-then-retry already solves for its feed)
+     * - scrolls the thread's own vertical ScrollView and retries rather
+     * than treating a zero-size node as "nothing left to expand". Found
+     * the hard way: the first attempt at this scrolled `item_pager`
+     * instead, which looks like a plausible scroll container but is
+     * actually the HORIZONTAL pager for swiping to the next/previous
+     * CONVERSATION in the inbox - calling ACTION_SCROLL_FORWARD on it
+     * silently navigated clean away to a different email entirely, with
+     * no error, no crash, just a picker built from the wrong thread's
+     * (much shorter) message list. The real vertical scroll container
+     * has no resource id at all, only a stable className
+     * ("android.widget.ScrollView") - id lookups are useless here, has
+     * to be a class match. */
+    private const val MAX_FULL_EXPAND_ITERATIONS = 24
+
+    /** Total count of still-collapsed messages by EITHER signal (see
+     * expandAllMessages' own doc for what Path 1/Path 2 mean) - the real
+     * "are we done" and "did that click actually do anything" measure,
+     * used instead of the target node's own on-screen bounds. Bounds
+     * looked like a reasonable progress signal at first (clicking the
+     * exact same bounds twice in a row certainly means nothing changed)
+     * but produced a false-positive "stuck" abort live: after a message
+     * expands, everything below it reflows, and a completely DIFFERENT
+     * still-collapsed message can land at the exact bounds the previous
+     * one just occupied - aborting a genuinely still-progressing loop
+     * after only 3 of 6 messages. A plain remaining-count, unaffected by
+     * where things happen to be drawn, doesn't have this problem. */
+    private fun collapsedMessageTarget(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        // Path 1: a still-collapsed card with a real `email_snippet` -
+        // walk up to its `upper_header` (the snippet/sender text itself
+        // isn't independently clickable).
+        val snippet = AccessibilityTree.findNode(root) { it.viewIdResourceName?.endsWith("email_snippet") == true }
+        if (snippet != null) {
+            var header: AccessibilityNodeInfo? = snippet
+            while (header != null && header.viewIdResourceName?.endsWith("upper_header") != true) header = header.parent
+            return header ?: snippet
+        }
+        // Path 2: a message materialized from a super_collapsed_block
+        // that never got the real upper_header/email_snippet structure
+        // at all - just an empty per-message-unique "-header" node,
+        // clickable only via a bounds tap. Its own emptiness persists
+        // even AFTER expanding (confirmed live - the real populated
+        // content shows up as a separate "<same base id>-content"
+        // sibling, the "-header" node itself never changes), so
+        // emptiness alone can't tell "still collapsed" from "already
+        // expanded" - checking for that sibling's absence is what
+        // actually distinguishes them, same idea as
+        // email_snippet-vs-recipient_summary in Path 1 above.
+        return AccessibilityTree.findNode(root) {
+            val id = it.viewIdResourceName ?: return@findNode false
+            if (!id.endsWith("-header") || id.endsWith("upper_header")) return@findNode false
+            if (!(it.text.isNullOrEmpty() && it.childCount == 0)) return@findNode false
+            val baseId = id.removeSuffix("-header")
+            AccessibilityTree.findNode(root) { n -> n.viewIdResourceName == "$baseId-content" } == null
+        }
+    }
+
+    private fun countCollapsedTargets(root: AccessibilityNodeInfo): Int {
+        val snippets = AccessibilityTree.findAllNodes(root) { it.viewIdResourceName?.endsWith("email_snippet") == true }.size
+        val emptyHeaders = AccessibilityTree.findAllNodes(root) {
+            val id = it.viewIdResourceName ?: return@findAllNodes false
+            if (!id.endsWith("-header") || id.endsWith("upper_header")) return@findAllNodes false
+            if (!(it.text.isNullOrEmpty() && it.childCount == 0)) return@findAllNodes false
+            val baseId = id.removeSuffix("-header")
+            AccessibilityTree.findNode(root) { n -> n.viewIdResourceName == "$baseId-content" } == null
+        }.size
+        return snippets + emptyHeaders
+    }
+
+    private fun expandAllMessages(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): AccessibilityNodeInfo {
+        var current = root
+        repeat(MAX_FULL_EXPAND_ITERATIONS) { iteration ->
+            val superCollapsed = AccessibilityTree.findNode(current) {
+                it.viewIdResourceName?.endsWith("super_collapsed_block") == true
+            }
+            if (superCollapsed != null) {
+                Log.i(TAG, "expandAllMessages[$iteration]: popping super_collapsed_block")
+                if (!service.click(superCollapsed)) return current
+                Thread.sleep(500)
+                current = service.foregroundRoot()?.second ?: return current
+                return@repeat
+            }
+            val before = countCollapsedTargets(current)
+            if (before == 0) {
+                Log.i(TAG, "expandAllMessages[$iteration]: nothing left to expand")
+                return current
+            }
+            val target = collapsedMessageTarget(current) ?: return current
+            val bounds = Rect()
+            target.getBoundsInScreen(bounds)
+            if (bounds.isEmpty) {
+                Log.i(TAG, "expandAllMessages[$iteration]: next message off-screen, scrolling")
+                val scrollView = AccessibilityTree.findNode(current) { it.className == "android.widget.ScrollView" }
+                if (scrollView == null || !service.scrollForward(scrollView)) return current
+                Thread.sleep(400)
+                current = service.foregroundRoot()?.second ?: return current
+                return@repeat
+            }
+            Log.i(TAG, "expandAllMessages[$iteration]: expanding a message ($before remaining)")
+            if (!service.click(target)) return current
+            Thread.sleep(700)
+            var next = service.foregroundRoot()?.second ?: return current
+            // Might just be Gmail's expand animation not settled yet
+            // rather than a real stuck state - a few longer retries
+            // before giving up (see this function's own doc for why a
+            // real repeat wait, not just one, was needed here - the
+            // emulator's rendering can lag well past the first 700ms on
+            // a long thread with several messages already expanded).
+            var retriesLeft = 3
+            var extraWaitMs = 500
+            while (countCollapsedTargets(next) >= before && retriesLeft > 0) {
+                Thread.sleep(extraWaitMs.toLong())
+                next = service.foregroundRoot()?.second ?: return current
+                retriesLeft--
+                extraWaitMs += 300
+            }
+            if (countCollapsedTargets(next) >= before) {
+                Log.w(TAG, "expandAllMessages[$iteration]: no progress after retries, stopping")
+                return next
+            }
+            current = next
+        }
+        return current
+    }
+
+    /** Reads only the messages the user picked in MessagePickerActivity.
+     * Reuses extract()'s own (already-tested) full-thread walk rather
+     * than a second, parallel per-container extraction path: each
+     * message's segment is just the run of lines from its own "From: "
+     * line up to the next one, and container order matches "From: " line
+     * order exactly (both come from the same document-order tree walk
+     * over the same, by-then-fully-expanded tree). The thread's Subject
+     * line is always prepended once, for context, regardless of which
+     * messages were picked. */
+    private fun readSelectedMessages(service: ReadAloudAccessibilityService, indices: List<Int>, label: String) {
+        val root = service.findForegroundWithRetry(packageName)?.second
+        if (root == null || !isOpenEmailScreen(root)) { service.toast("No email is open"); return }
+        val fullyExpanded = expandAllMessages(service, root)
+        val lines = try { extract(service, fullyExpanded, "this_email") } catch (e: Exception) { emptyList() }
+        if (lines.isEmpty()) { service.toast("Nothing readable found on screen"); return }
+        val fromIndices = lines.withIndex().filter { it.value.startsWith("From: ") }.map { it.index }
+        if (fromIndices.isEmpty()) { service.toast("Couldn't tell messages apart"); return }
+        val subjectLine = lines.firstOrNull { it.startsWith("Subject: ") }
+        val segments = fromIndices.mapIndexed { i, start ->
+            val end = fromIndices.getOrNull(i + 1) ?: lines.size
+            lines.subList(start, end)
+        }
+        val chosen = indices.mapNotNull { segments.getOrNull(it) }.flatten()
+        if (chosen.isEmpty()) { service.toast("No messages selected"); return }
+        val text = (listOfNotNull(subjectLine) + chosen).joinToString("\n").trim()
+        service.toast("Reading $label…")
+        TtsSpeaker.speak(service, label, text)
+    }
 
     private fun expandCollapsedMessages(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): AccessibilityNodeInfo {
         var current = root
