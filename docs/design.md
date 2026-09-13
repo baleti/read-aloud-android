@@ -547,26 +547,70 @@ real multi-message thread, offers a second-level chooser ("Read all" /
 button, matching the existing chooser's dark theme) built straight from
 `extract()`'s own already-working "From: "/date line output.
 
-**Known limitation, not yet fully solved**: `expandAllMessages()`
-correctly clicks through collapsed messages one at a time (confirmed
-live: real, monotonic progress each iteration, e.g. "12 remaining" ->
-"8 remaining" -> "5 remaining" against the real 6-message test thread),
-but reliably stalls a few messages short of full completion on THIS
-particular thread within emulator testing - `read_selected`'s resulting
-picker showed only 2 of the thread's 6 messages by the time it stopped
-making countable progress, even with three staggered retries (500ms,
-800ms, 1100ms) between checks. Root cause not fully isolated: confirmed
-this is NOT the earlier `item_pager` mis-scroll bug (fixed, verified
-separately), and confirmed real per-click progress does happen (so it's
-not simply "the click doesn't work") - most likely a genuine animation/
-render-settling delay on this specific emulator config (software-
-rendered final composite frames even with `-gpu host`) that occasionally
-exceeds even the longest retry window, compounded by a message low
-enough in a long thread needing an explicit scroll(the `ScrollView`
-fallback) that may itself need a longer settle time than currently
-given. Whatever ships tomorrow morning should be described to the user
-as "usually gets most/all messages, occasionally stops partway on a
-long thread" rather than "fully solved" - worth a fresh pass with more
-generous timing constants, and ideally re-tested on the real phone
-(likely faster/more consistent GPU compositing than this emulator) once
-available, before calling this closed.
+**Update, same evening, after further live debugging**: the count-
+mismatch above turned out to have real, fully-diagnosed causes, not a
+timing/animation issue as first guessed:
+
+1. **Cross-conversation contamination** (the bigger of the two, and a
+   real regression, not just an incompleteness): Gmail's conversation
+   screen is a ViewPager that keeps the adjacent conversation's page
+   fully instantiated for swipe performance. `AccessibilityTree.findNode()`/
+   `findAllNodes()` walked the WHOLE tree with no visibility check at
+   all (unlike `walk()`, which always had one) - so `countMessages()`
+   on a genuinely single-message email, opened right after a real
+   6-message thread, consistently counted 5 (not 1): the previous
+   thread's leftover off-screen page. Confirmed via added logging that
+   every contaminating node reported `isVisibleToUser=false` with a
+   degenerate (inverted, e.g. left=0/right=-21) rect - which is ALSO,
+   by Android's own `Rect.isEmpty()`, "empty", so a bounds-only
+   same-page-vs-different-page heuristic (tried first) missed them
+   completely on its own. Fixed in `AccessibilityTree.findNode()`/
+   `findAllNodes()` (see their own doc) - both now skip a node that's
+   either not `isVisibleToUser` or has a real, shifted-off-to-one-side
+   rect, without also excluding a legitimate same-page item merely
+   awaiting a scroll (which reports an EMPTY rect and every case
+   observed live was still `isVisibleToUser=true`).
+2. **A second, independent bug in `expandAllMessages()`'s own "still
+   collapsed" search**: its Path 2 predicate matched any id ending in
+   "-header" - which ALSO matches `conversation-header`, the thread's
+   own decorative top header (not a message at all). Sitting first in
+   document order, it got picked as the click target every single
+   iteration instead of the real remaining message, since it happens to
+   satisfy every other Path 2 condition too (empty text, no children, no
+   "-content" sibling - by nature, not because it's unexpanded).
+   Clicking it did nothing, so the loop looked permanently "stuck" one
+   message short. Fixed with a precise `^m#msg-f:\d+-header$` regex
+   instead of a loose suffix check.
+
+With both fixed, `expandAllMessages()` now reliably reaches "1
+remaining" (from an original "5 remaining, permanently stuck") against
+the real 6-message test thread, and the false-chooser regression on
+ordinary single-message emails is gone entirely (verified repeatedly,
+not once).
+
+**Still-open, separately-diagnosed gap**: even once `expandAllMessages()`
+gets every message's own `-content` node into the DOM, `extract()`'s
+`read_all` output stayed capped at exactly 1107 chars / 2 messages
+regardless - moving the STOP_MARKERS footer-trim to skip entirely for a
+real multi-message thread (implemented, see `extract()`'s own doc)
+made no difference at all, which rules that out as the cause. The
+remaining suspect, not yet confirmed: `collectText()`/`walk()` (the
+actual text-collecting walk `extract()` calls) has ALWAYS skipped
+anything not currently `isVisibleToUser` - by original design, for
+good reason (an off-screen virtualized list item genuinely isn't
+"there" to read) - but a long thread's later messages, even once
+expanded in the DOM, likely sit below the current scroll position and
+so still report not-visible at the exact moment `extract()` runs right
+after expansion finishes. A manual scroll-then-retry did NOT change the
+output in one quick live test, which doesn't fully fit that theory
+either - genuinely not resolved tonight. The real fix, if the
+visibility theory holds, is a scroll-and-accumulate extraction loop
+for a multi-message thread (walk the tree, scroll down, walk again,
+merge, repeat until the bottom) - the same shape of pattern
+RedditProfile's own feed-scrolling already uses, not a one-line fix.
+Ship tomorrow morning as: the chooser and expansion mechanics are
+solid and regression-tested, but "Read all"/"Read selected" on a long
+(4+ message) thread may only capture the first couple of messages'
+content - worth a fresh, focused debugging pass (with fresh eyes and
+a bit more time) before calling this feature complete, not a "trust it
+fully" state yet.

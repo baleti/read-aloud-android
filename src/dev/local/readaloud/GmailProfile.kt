@@ -168,6 +168,7 @@ object GmailProfile : AppProfile {
                 val fullyExpanded = expandAllMessages(service, root)
                 val lines = try { extract(service, fullyExpanded, "this_email") } catch (e: Exception) { emptyList() }
                 val text = lines.joinToString("\n").trim()
+                Log.i(TAG, "read_all: ${text.length} chars, ${lines.count { it.startsWith("From: ") }} From: lines")
                 if (text.isBlank()) { service.toast("Nothing readable found on screen"); return true }
                 service.toast("Reading $label…")
                 TtsSpeaker.speak(service, label, text)
@@ -427,6 +428,19 @@ object GmailProfile : AppProfile {
      * one just occupied - aborting a genuinely still-progressing loop
      * after only 3 of 6 messages. A plain remaining-count, unaffected by
      * where things happen to be drawn, doesn't have this problem. */
+    // Path 2's target id, precisely - NOT just "anything ending in
+    // -header": confirmed live 2026-09-13 that `endsWith("-header")`
+    // alone also matches "conversation-header" (the THREAD's own
+    // decorative header, a single node with no message behind it at
+    // all) - which, sitting first in document order, got PICKED as the
+    // click target every single iteration instead of the real stuck
+    // message, since it satisfies every other Path 2 condition too
+    // (empty text, no children, no matching "-content" sibling - it has
+    // none of those by nature, not because it's an unexpanded message).
+    // Clicking it does nothing, so the loop looked "stuck" forever on
+    // what was actually a real, resolvable message right behind it.
+    private val EMPTY_HEADER_REGEX = Regex("""^m#msg-f:\d+-header$""")
+
     private fun collapsedMessageTarget(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         // Path 1: a still-collapsed card with a real `email_snippet` -
         // walk up to its `upper_header` (the snippet/sender text itself
@@ -450,7 +464,7 @@ object GmailProfile : AppProfile {
         // email_snippet-vs-recipient_summary in Path 1 above.
         return AccessibilityTree.findNode(root) {
             val id = it.viewIdResourceName ?: return@findNode false
-            if (!id.endsWith("-header") || id.endsWith("upper_header")) return@findNode false
+            if (!EMPTY_HEADER_REGEX.matches(id)) return@findNode false
             if (!(it.text.isNullOrEmpty() && it.childCount == 0)) return@findNode false
             val baseId = id.removeSuffix("-header")
             AccessibilityTree.findNode(root) { n -> n.viewIdResourceName == "$baseId-content" } == null
@@ -461,7 +475,7 @@ object GmailProfile : AppProfile {
         val snippets = AccessibilityTree.findAllNodes(root) { it.viewIdResourceName?.endsWith("email_snippet") == true }.size
         val emptyHeaders = AccessibilityTree.findAllNodes(root) {
             val id = it.viewIdResourceName ?: return@findAllNodes false
-            if (!id.endsWith("-header") || id.endsWith("upper_header")) return@findAllNodes false
+            if (!EMPTY_HEADER_REGEX.matches(id)) return@findAllNodes false
             if (!(it.text.isNullOrEmpty() && it.childCount == 0)) return@findAllNodes false
             val baseId = id.removeSuffix("-header")
             AccessibilityTree.findNode(root) { n -> n.viewIdResourceName == "$baseId-content" } == null
@@ -580,10 +594,19 @@ object GmailProfile : AppProfile {
     override fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo, mode: String): List<String> {
         val workingRoot = if (isOpenEmailScreen(root)) expandCollapsedMessages(service, root) else root
         val all = AccessibilityTree.collectTextWithLabels(workingRoot, FIELD_LABELS)
-        // "Unsubscribe" legitimately appears once near the top (its own
-        // header button, confirmed live) -- only a SECOND occurrence, or
-        // any of the platform-name/legal markers at all, counts as the
-        // footer starting.
+        // STOP_MARKERS assumes a SINGLE email's own footer marks the true
+        // end of everything worth reading - confirmed live 2026-09-13
+        // this breaks a real multi-message thread badly: the walk hits
+        // the FIRST message's own footer ("Unsubscribe"/"view it on
+        // GitHub"/...) and stops there, silently discarding every
+        // message after it - "read all" on a real 6-message thread kept
+        // producing the exact same ~1107 chars regardless of how many
+        // messages expandAllMessages() actually expanded underneath,
+        // because this break fired on message 1's footer every time.
+        // Only trim at all when there's genuinely one message to trim -
+        // a little footer noise read aloud per message in a real thread
+        // is a far smaller cost than silently losing most of the thread.
+        val trimFooters = countMessages(workingRoot) <= 1
         var seenUnsubscribeOnce = false
         val out = mutableListOf<String>()
         for (rawLine in all) {
@@ -592,17 +615,19 @@ object GmailProfile : AppProfile {
             } else {
                 rawLine
             }
-            val lower = line.lowercase()
-            val isFooterMarker = STOP_MARKERS.any { marker ->
-                if (marker == "unsubscribe") {
-                    val hit = lower.contains(marker) && seenUnsubscribeOnce
-                    if (lower.contains(marker)) seenUnsubscribeOnce = true
-                    hit
-                } else {
-                    lower == marker || lower.startsWith("$marker ") || lower.contains(" $marker ")
+            if (trimFooters) {
+                val lower = line.lowercase()
+                val isFooterMarker = STOP_MARKERS.any { marker ->
+                    if (marker == "unsubscribe") {
+                        val hit = lower.contains(marker) && seenUnsubscribeOnce
+                        if (lower.contains(marker)) seenUnsubscribeOnce = true
+                        hit
+                    } else {
+                        lower == marker || lower.startsWith("$marker ") || lower.contains(" $marker ")
+                    }
                 }
+                if (isFooterMarker) break
             }
-            if (isFooterMarker) break
             out.add(line)
         }
         return out

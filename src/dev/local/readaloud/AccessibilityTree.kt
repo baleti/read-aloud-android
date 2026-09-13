@@ -153,24 +153,76 @@ object AccessibilityTree {
     /** First node (depth-first) whose own text or content-desc matches
      * `predicate` -- used to find "N more replies"-shaped buttons whose
      * exact resource-id/wording is app-specific (see RedditProfile) without
-     * every profile re-implementing its own tree walk for it. */
+     * every profile re-implementing its own tree walk for it.
+     *
+     * Skips a subtree that's either not `isVisibleToUser` or has a real
+     * (non-empty) rect entirely to one side of `root`'s own bounds - see
+     * isOffScreenPage()'s own doc for what each half of that catches and
+     * why BOTH are needed. Fixes a confirmed-live bug 2026-09-13: Gmail's
+     * conversation screen is a ViewPager that keeps the adjacent
+     * (previous/next) conversation's page fully instantiated for swipe
+     * performance, so a plain "walk the whole tree" search - unlike
+     * walk() (used by collectText()/collectTextWithLabels()), which
+     * already filtered on visibility - could match nodes belonging to
+     * whatever thread the user had open BEFORE this one. Confirmed via
+     * added logging: opening a genuinely single-message email right
+     * after a real 6-message thread consistently (not intermittently -
+     * ruling out a timing race, which an earlier attempt at this fix
+     * wrongly assumed) counted 5 message headers instead of 1, every one
+     * of the 4 extra reporting `isVisibleToUser=false` with a degenerate
+     * (inverted, e.g. left=0/right=-21) rect - which is also, by
+     * Android's own `Rect.isEmpty()` definition, "empty", so a
+     * bounds-only check missed them entirely on its own; visibility
+     * alone was the fix for THIS case. The bounds half stays anyway as
+     * defense-in-depth against a differently-behaved app whose off-page
+     * siblings report visible=true with real, shifted bounds instead -
+     * not observed here, but a plain OR of both signals costs nothing
+     * extra when only one of them is ever actually triggered. */
     fun findNode(root: AccessibilityNodeInfo, predicate: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
-        if (predicate(root)) return root
-        for (i in 0 until root.childCount) {
-            val child = root.getChild(i) ?: continue
-            findNode(child, predicate)?.let { return it }
+        val rootBounds = Rect()
+        root.getBoundsInScreen(rootBounds)
+        return findNode(root, rootBounds, predicate)
+    }
+
+    private fun findNode(node: AccessibilityNodeInfo, rootBounds: Rect, predicate: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
+        if (isOffScreenPage(node, rootBounds)) return null
+        if (predicate(node)) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            findNode(child, rootBounds, predicate)?.let { return it }
         }
         return null
     }
 
     fun findAllNodes(root: AccessibilityNodeInfo, predicate: (AccessibilityNodeInfo) -> Boolean): List<AccessibilityNodeInfo> {
+        val rootBounds = Rect()
+        root.getBoundsInScreen(rootBounds)
         val out = mutableListOf<AccessibilityNodeInfo>()
         fun rec(node: AccessibilityNodeInfo) {
+            if (isOffScreenPage(node, rootBounds)) return
             if (predicate(node)) out.add(node)
             for (i in 0 until node.childCount) node.getChild(i)?.let { rec(it) }
         }
         rec(root)
         return out
+    }
+
+    /** True for a node that belongs to some OTHER on-screen page rather
+     * than the one `rootBounds` describes - see findNode()/
+     * findAllNodes()'s own doc for the real bug this catches and why it
+     * takes two signals, not one: not `isVisibleToUser` (the actual
+     * culprit found live), OR a real, non-empty rect entirely to one
+     * side of `rootBounds` (a hypothetical second shape of the same
+     * problem, kept as defense-in-depth). A same-page item merely
+     * awaiting a scroll reports an EMPTY rect (not a shifted real one)
+     * and IS `isVisibleToUser` in every case seen live, so it passes
+     * through untouched either way. */
+    private fun isOffScreenPage(node: AccessibilityNodeInfo, rootBounds: Rect): Boolean {
+        if (!node.isVisibleToUser) return true
+        val b = Rect()
+        node.getBoundsInScreen(b)
+        if (b.isEmpty) return false
+        return b.right <= rootBounds.left || b.left >= rootBounds.right
     }
 
     /** The largest (by screen area) scrollable node in the tree -- a
