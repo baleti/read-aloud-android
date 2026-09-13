@@ -328,6 +328,82 @@ newsdigest-android. Confirmed live end to end: a real `AudioTrack`
 long-press-power -> tap "Read Aloud" -> reads Gmail's open email path,
 not just a direct-trigger test.
 
+## Emulator (2026-09-13)
+
+Live phone testing kept losing races against the user's own real-time
+phone use (focus-stealing mid-test, once disrupting an active Monzo
+banking session) - set up a local Android emulator on host3 instead so
+Gmail UI-interaction development no longer touches the phone at all.
+
+- `~/.local/share/android-sdk`, installed via Google's own
+  `cmdline-tools` (downloaded directly from
+  `https://dl.google.com/android/repository/` - NOT `/android/repo/`,
+  which 404s for current filenames; the right current filename/path
+  comes from fetching `repository2-3.xml` first).
+- AVD `readaloud_test`: `system-images;android-34;google_apis_playstore;x86_64`,
+  Pixel 6 device profile. Play Store present but its own sign-in got
+  stuck on a forced password step - irrelevant, since apps are installed
+  directly via `adb install`/`install-multiple`, never through the Play
+  Store UI.
+- Gmail itself: no APK download needed - pulled the real, already-signed
+  split APKs straight off the phone (`adb pull` each
+  `pm path com.google.android.gm` split) and `install-multiple`d them
+  onto the emulator. The `arm64_v8a` split installs and runs fine on the
+  x86_64 image, confirming this Play system image ships ARM translation.
+  Signed into the real `baleti3266@gmail.com` account via `scrcpy`
+  (`pacman -S scrcpy`, mirrors+controls any adb device) for one real,
+  interactive Google login - not automated, deliberately, since it can
+  hit CAPTCHA/2FA.
+- **CPU/thermal**: the emulator's default launch (visible Qt window +
+  `-gpu swiftshader_indirect` software rendering) pinned 2 cores at
+  200%+ and pushed package temps to 88°C, even though nothing was
+  visually watching it - the guest fully composites its UI internally
+  regardless of whether a host window shows it. Fixed by launching
+  `-no-window -no-audio -no-boot-anim -camera-back none -camera-front
+  none -gpu host -cores 2 -memory 2048` plus disabling animation scales
+  (`window_animation_scale`/`transition_animation_scale`/
+  `animator_duration_scale` = 0) - steady-state dropped to ~27% CPU, 72°C.
+  `-gpu host` (real hardware-accelerated rendering via the already-
+  confirmed KVM/VT-x path) instead of software rasterization was the
+  actual fix; headless/no-audio/no-animation are secondary savings.
+- Network: the AVD's default NAT can still reach host3's own LAN IP
+  (`10.10.0.2:8792`, the TTS server `Settings.DEFAULT_HOST`/`DEFAULT_TTS_PORT`
+  point at) directly - confirmed via `ping` from inside the emulator,
+  no bridge/port-forward setup needed.
+
+**First live bug the emulator caught** (would have been very hard to
+isolate on the phone, where every earlier attempt at this exact
+scenario landed on the wrong foreground app instead): right after
+`ModeChooserActivity.finish()`, `findForegroundWithRetry()` briefly
+accepted a status-bar/notification-panel window as "the foreground
+screen" - `GmailProfile.extract()` dutifully read its icon
+content-descriptions ("Wifi signal full", "Battery charging, 100
+percent") as if they were email content. Root cause:
+`foregroundRoot()` only ever excluded *our own* package
+(`dev.local.readaloud`) as "not the app we want" - it never checked
+that what came back was actually the *expected* app, even in the one
+call site (`readWithMode()`) that already knows exactly which package
+it's waiting for (`pkg`, passed down from `ModeChooserActivity` itself).
+Fixed by adding an optional `expectedPackage` param to
+`findForegroundWithRetry()` that keeps retrying until the returned
+window's package actually matches, used by `readWithMode()` and by
+every `GmailProfile` call site that's mid-navigation within Gmail
+(these already implicitly expect `packageName` back). The loops that
+poll `foregroundRoot()` directly (waiting for an email to open,
+`expandCollapsedMessages()`) were already safe by construction - they
+additionally check for Gmail-specific resource IDs before accepting a
+result, so a wrong-package root just fails that check and gets retried
+naturally.
+
+**First live verification of `expandCollapsedMessages()`**: tested
+against a real synced thread with a genuine collapsed-3-messages block
+(a GitHub notification thread). Confirmed both the resource IDs the
+code was written against (`super_collapsed_block`, `email_snippet`,
+`upper_header`) match the real live tree exactly, and that clicking the
+block actually expands it on screen (the "3" indicator disappears,
+full message bodies appear) - extraction went from a single truncated
+message to 1107 chars spanning all previously-collapsed messages.
+
 ## Open questions for next session
 
 1. **`ocrScreenshot()` is currently only wired into `RedditProfile`.**

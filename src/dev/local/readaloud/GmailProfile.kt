@@ -148,7 +148,7 @@ object GmailProfile : AppProfile {
                 // pass: reported live 2026-09-13 as "No email is open"
                 // firing every time onwards/backwards was picked from the
                 // chooser, immediately after it closed.
-                val emailRoot = service.findForegroundWithRetry()?.second
+                val emailRoot = service.findForegroundWithRetry(packageName)?.second
                 if (emailRoot == null || !isOpenEmailScreen(emailRoot)) {
                     service.toast("No email is open")
                     return true
@@ -179,7 +179,7 @@ object GmailProfile : AppProfile {
         val sender = lines.firstOrNull { it.startsWith("From: ") }?.removePrefix("From: ")?.trim()
         service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
         Thread.sleep(500)
-        val listRoot = service.findForegroundWithRetry()?.second ?: return null
+        val listRoot = service.findForegroundWithRetry(packageName)?.second ?: return null
         val rows = listRows(listRoot)
         val idx = rows.indexOfFirst { row ->
             val t = (row.text?.toString() ?: "").lowercase()
@@ -211,11 +211,11 @@ object GmailProfile : AppProfile {
             }
             steps++
 
-            var root = service.findForegroundWithRetry()?.second ?: return
+            var root = service.findForegroundWithRetry(packageName)?.second ?: return
             if (isOpenEmailScreen(root)) {
                 service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
                 Thread.sleep(500)
-                root = service.findForegroundWithRetry()?.second ?: return
+                root = service.findForegroundWithRetry(packageName)?.second ?: return
             }
             if (isOpenEmailScreen(root)) {
                 service.toast("Couldn't get back to the inbox list")
@@ -256,8 +256,55 @@ object GmailProfile : AppProfile {
         service.toast("Stopped after $MAX_SEQUENCE_EMAILS emails")
     }
 
+    // Confirmed live 2026-09-13 against a real GitHub-notification thread
+    // with 5 messages: Gmail auto-expands only the LATEST message, showing
+    // every earlier one as a collapsed card (sender/date/one-line
+    // `email_snippet`, not the real body) - reading as-is gives an
+    // incomplete impression of the thread, exactly what was reported
+    // ("reading whats visible which is bit of semi-collapse text").
+    // Real mechanism, found by walking the actual tree:
+    //   - `super_collapsed_block` (content-desc "Expand N older messages")
+    //     is a stub standing in for messages not rendered AT ALL yet -
+    //     tapping it materializes them (as more collapsed cards, or
+    //     occasionally another super_collapsed_block if there were even
+    //     more - looped below, not assumed to resolve in one tap).
+    //   - Each individual collapsed card's clickable ancestor is
+    //     `upper_header` (NOT the card's own sender_name/snippet text,
+    //     which aren't independently clickable) - tapping it expands that
+    //     one message. A collapsed card is told apart from an already-
+    //     expanded one by containing an `email_snippet` descendant at all
+    //     (an expanded message has `recipient_summary` in that position
+    //     instead) - tapping an ALREADY-expanded message's header would
+    //     just re-collapse it, so this check matters, not just a
+    //     convenience.
+    private const val MAX_EXPAND_ITERATIONS = 8
+
+    private fun expandCollapsedMessages(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): AccessibilityNodeInfo {
+        var current = root
+        repeat(MAX_EXPAND_ITERATIONS) {
+            val superCollapsed = AccessibilityTree.findNode(current) {
+                it.viewIdResourceName?.endsWith("super_collapsed_block") == true
+            }
+            val target = superCollapsed ?: run {
+                val snippet = AccessibilityTree.findNode(current) {
+                    it.viewIdResourceName?.endsWith("email_snippet") == true
+                } ?: return current // nothing left to expand
+                var header: AccessibilityNodeInfo? = snippet
+                while (header != null && header.viewIdResourceName?.endsWith("upper_header") != true) {
+                    header = header.parent
+                }
+                header ?: snippet
+            }
+            if (!service.click(target)) return current
+            Thread.sleep(400) // let the newly-expanded body actually render before re-querying
+            current = service.foregroundRoot()?.second ?: return current
+        }
+        return current
+    }
+
     override fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo, mode: String): List<String> {
-        val all = AccessibilityTree.collectTextWithLabels(root, FIELD_LABELS)
+        val workingRoot = if (isOpenEmailScreen(root)) expandCollapsedMessages(service, root) else root
+        val all = AccessibilityTree.collectTextWithLabels(workingRoot, FIELD_LABELS)
         // "Unsubscribe" legitimately appears once near the top (its own
         // header button, confirmed live) -- only a SECOND occurrence, or
         // any of the platform-name/legal markers at all, counts as the

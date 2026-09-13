@@ -125,7 +125,7 @@ class ReadAloudAccessibilityService : AccessibilityService() {
         // to do here if it says it took care of `mode`.
         if (profile.runMode(this, mode, labelFor(pkg))) return
 
-        val (_, root) = findForegroundWithRetry() ?: run { toast("Couldn't find a screen to read"); return }
+        val (_, root) = findForegroundWithRetry(pkg) ?: run { toast("Couldn't find a screen to read"); return }
         val lines = try {
             if (profile.needsTouchExploration) {
                 withTouchExplorationMode { profile.extract(this, root, mode) }
@@ -148,9 +148,20 @@ class ReadAloudAccessibilityService : AccessibilityService() {
      * the real app yet -- same race DictateAccessibilityService's own doc
      * already found and solved the same way: a short retry loop rather
      * than one fixed delay. */
-    fun findForegroundWithRetry(): Pair<String, AccessibilityNodeInfo>? {
+    /** `expectedPackage`, when given, rejects a transiently-wrong window
+     * instead of accepting it as truth - confirmed live 2026-09-13 against
+     * the emulator: right after ModeChooserActivity.finish(), foregroundRoot()
+     * (which only excludes OUR OWN package) briefly caught a status-bar/
+     * notification-panel window instead of Gmail, and GmailProfile happily
+     * "read" that window's icon content-descriptions ("Wifi signal full",
+     * "Battery charging, 100 percent") as if it were the email. Every call
+     * site that already knows which app it's expecting (readWithMode() has
+     * `pkg` from ModeChooserActivity; GmailProfile is always expecting
+     * itself mid-navigation) should pass it here instead of trusting
+     * "not our own package" as good enough. */
+    fun findForegroundWithRetry(expectedPackage: String? = null): Pair<String, AccessibilityNodeInfo>? {
         repeat(8) {
-            foregroundRoot()?.let { return it }
+            foregroundRoot()?.let { if (expectedPackage == null || it.first == expectedPackage) return it }
             Thread.sleep(150)
         }
         return null
