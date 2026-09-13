@@ -434,6 +434,40 @@ correctly post-fix, no repro. Treating this as resolved by the same
 `expectedPackage` fix rather than a separate bug, pending any future
 report that reintroduces it.
 
+## Reddit on the emulator: blocked, not a bug in this project (2026-09-13)
+
+Tried to get Reddit usable on the emulator for more realistic
+RedditProfile testing. Findings:
+
+- The Reddit app has no logged-out/guest browsing entry point at all -
+  backing out of the welcome screen exits straight to the launcher, no
+  "skip" or "browse without an account" option anywhere in it (unlike
+  reddit.com itself, which does allow anonymous browsing).
+- "Continue with Google" (the account already used for Gmail/this same
+  emulator) reaches Google's real account picker fine, and picking the
+  account closes it cleanly - but Reddit's own backend then rejects it
+  with "We were unable to authenticate you". This is a server-side
+  rejection after a valid Google credential was already returned, not
+  an input/automation problem - almost certainly this emulator failing
+  Google Play Integrity attestation (a stock, uncertified AVD image is
+  exactly what that's designed to catch), which is outside anything
+  fixable by UI automation from this side.
+- WhatsApp showed a separate, likely related symptom on its own
+  verification screen: neither `adb shell input` NOR the user's own
+  real touches via `scrcpy` could focus or type into the verification-
+  code field at all (`dumpsys input_method`'s `mServedView` stayed
+  pinned to the screen's back button through repeated attempts) -
+  consistent with deliberate anti-automation/emulator detection on a
+  security-sensitive screen, not a bug in this project's own tooling.
+- Signal, by contrast, logged in fine via the user's own direct scrcpy
+  interaction - so this isn't a blanket "nothing works on this
+  emulator" problem, just these two specific flows.
+
+Not pursued further per explicit instruction - genuinely external
+blockers, not something more retrying fixes. If a Play-certified
+system image or a real device becomes available later, this is worth
+retrying rather than treating as permanently closed.
+
 ## Open questions for next session
 
 1. **`ocrScreenshot()` is currently only wired into `RedditProfile`.**
