@@ -404,6 +404,36 @@ block actually expands it on screen (the "3" indicator disappears,
 full message bodies appear) - extraction went from a single truncated
 message to 1107 chars spanning all previously-collapsed messages.
 
+**Second real bug, same session, found once the first one was fixed**:
+"Continue onwards through inbox" then failed every time with "Couldn't
+locate this email in the inbox list" - `findCurrentRowIndex()` required
+BOTH a subject-prefix AND a sender-prefix match against the list row's
+text, but Gmail's list row for a multi-message thread shows only one
+participant name of its own choosing (here "Marcos", for a thread whose
+first message's `From:` - what extraction actually returns - was
+"Michael Gifford"), which need not be the first, latest, or even a
+majority sender. Requiring it as a hard AND condition turned a correct,
+unique subject match into a permanent failure. Fixed by matching on
+subject alone unless multiple rows match it, in which case sender is
+used only to pick among those candidates. Re-verified live afterward:
+"onwards" correctly walked 5 real inbox emails in sequence, opening
+each one on screen, extracting real content (not chrome/badges) with
+correct Subject/From labels, before being intentionally superseded by
+the next test.
+
+**The earlier, previously-undiagnosed "nothing readable found on
+screen" report** (from live phone testing, its logs lost to a
+wireless-debugging outage before they could be captured) very likely
+had the same root cause as the status-bar bug above - it was reported
+happening right after picking "This email" from the chooser, the exact
+same transition point. Tried to reproduce directly on the emulator
+against both a single-message rich-HTML/WebView email (Anthropic
+billing notice, logo image + styled paragraphs) and one with inline
+`<code>`-styled spans (a tmux GitHub notification) - both extracted
+correctly post-fix, no repro. Treating this as resolved by the same
+`expectedPackage` fix rather than a separate bug, pending any future
+report that reintroduces it.
+
 ## Open questions for next session
 
 1. **`ocrScreenshot()` is currently only wired into `RedditProfile`.**

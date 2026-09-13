@@ -169,10 +169,21 @@ object GmailProfile : AppProfile {
      * list, and finds the one matching row - the one place this feature
      * still needs content-matching rather than a plain index (see class
      * doc for the real duplicate-subject case that makes this imperfect).
-     * Short prefixes (subject: 20 chars, sender: 15) rather than exact
-     * matches, since the list truncates snippets/subjects differently
-     * than the open view - confirmed live the list's own text can cut a
-     * subject off earlier than the full one shown when open. */
+     * Short prefix (20 chars) rather than an exact match, since the list
+     * truncates subjects differently than the open view - confirmed live
+     * the list's own text can cut a subject off earlier than the full one
+     * shown when open.
+     *
+     * Sender is used ONLY to disambiguate multiple subject matches, never
+     * as a required condition - confirmed live 2026-09-13 this breaks
+     * real, unambiguous matches otherwise: a multi-message thread's list
+     * row shows a single participant name Gmail itself picks (here
+     * "Marcos" for a thread whose first message's "From:" - what
+     * `extract(..., "this_email")` returns - was "Michael Gifford"),
+     * which is neither the first nor necessarily the latest message's
+     * sender. Requiring it as a hard AND condition alongside subject
+     * turned a real, correct, unique subject match into "Couldn't locate
+     * this email in the inbox list" every time. */
     private fun findCurrentRowIndex(service: ReadAloudAccessibilityService, emailRoot: AccessibilityNodeInfo): Int? {
         val lines = extract(service, emailRoot, "this_email")
         val subject = lines.firstOrNull { it.startsWith("Subject: ") }?.removePrefix("Subject: ")?.trim()
@@ -181,13 +192,18 @@ object GmailProfile : AppProfile {
         Thread.sleep(500)
         val listRoot = service.findForegroundWithRetry(packageName)?.second ?: return null
         val rows = listRows(listRoot)
-        val idx = rows.indexOfFirst { row ->
-            val t = (row.text?.toString() ?: "").lowercase()
-            val subjectOk = subject.isNullOrBlank() || t.contains(subject.take(20).lowercase())
-            val senderOk = sender.isNullOrBlank() || t.contains(sender.take(15).lowercase())
-            subjectOk && senderOk
+        if (subject.isNullOrBlank()) return null
+        val subjectMatches = rows.withIndex().filter { (_, row) ->
+            (row.text?.toString() ?: "").lowercase().contains(subject.take(20).lowercase())
         }
-        return idx.takeIf { it >= 0 }
+        val chosen = when {
+            subjectMatches.isEmpty() -> return null
+            subjectMatches.size == 1 -> subjectMatches.first()
+            else -> subjectMatches.firstOrNull { (_, row) ->
+                sender != null && (row.text?.toString() ?: "").lowercase().contains(sender.take(15).lowercase())
+            } ?: subjectMatches.first()
+        }
+        return chosen.index
     }
 
     /** The actual loop: make sure we're on the list, tap the row at
