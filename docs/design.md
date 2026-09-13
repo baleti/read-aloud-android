@@ -235,6 +235,88 @@ output at `build/outputs/apk/debug/read-aloud-android-debug.apk` (~9MB,
 up from ~815KB pre-ML-Kit - entirely the dependency graph's classes/
 resources, no native libraries, no bundled OCR model weights).
 
+## Chrome filtering and other Gmail refinements (2026-09-13)
+
+Reported live: reading an open Gmail email spoke toolbar button labels
+("emoji reaction", "forward", "share") right alongside the message.
+`AccessibilityTree.isChrome()` now skips a node when either is true
+(confirmed against a real dump, no false positives on 71 real content
+nodes checked): its resource-id contains "button" or "badge" (NOT gated
+on `isClickable` - confirmed live that "Reply all"/"Forward" are
+`clickable="false"` TextView labels sitting inside a separately-clickable
+container, so requiring the label itself to be clickable missed them),
+or it's clickable with no visible `.text` and only a short (<=4 word)
+content-desc on a common icon-control class (catches "Navigate up",
+"More options", "Add star", "Mark unread", "Add emoji reaction").
+
+Real bug found applying this: it was only added to `walk()`
+(`collectText()`'s implementation), not `walkLabeled()`
+(`collectTextWithLabels()`'s, separate function) - GmailProfile calls the
+latter, so the fix silently didn't apply to Gmail at all until the two
+walks were unified into one. Worth remembering: this project's `AppProfile`
+model means every fix needs checking against which actual extraction path
+a given profile uses, not just "did I add it to AccessibilityTree.kt".
+
+The "badge" id-pattern was added after a second live report: Gmail's
+contact-badge icon has content-desc "Show contact information for
+<sender name>" - a multi-word name pushes it past the 4-word cutoff, so
+word-count alone couldn't catch it; the resource-id (`contact_badge`) can.
+
+Separately, "please skip badges/tags" also turned up a real Gmail quirk
+`AccessibilityTree`'s node-level filtering can't fix at all:
+`subject_and_folder_view`'s own `.text` bakes the folder/category chips
+directly onto the end of the subject string with no separator -
+`"...vps-af1b0c30.vps.ovh.net Inbox primary"` for an email that's both in
+the Inbox and the Primary tab. Not a separate node - it's the same string
+as the real subject. `GmailProfile.stripTrailingLabels()` strips a
+trailing run of Gmail's known category/location words
+(inbox/primary/social/promotions/updates/forums/starred/...) from
+whatever `subject_and_folder_view` produces before it gets the "Subject:"
+label. Known-imperfect (a subject genuinely ending in one of these exact
+words would get over-trimmed) - same tradeoff class as `STOP_MARKERS`.
+
+## Generating-audio overlay + streaming position reporting (2026-09-13)
+
+Reported live: the first sentence plays almost instantly, but a later
+one can take ~10s to synthesize (worse with Chatterbox than Kokoro - see
+server.py), with nothing indicating the app hasn't just frozen.
+
+Two fixes, one of which was a real bug rather than a missing feature:
+`TtsSpeaker` never sent `{"type":"position","played_ms":...}` back to the
+server at all - the position-feedback loop `newsdigest-android`'s
+`ReadAloudController` (this protocol's original implementation) has
+always needed to tell the server how far playback has actually gotten,
+so it knows how far ahead it's safe to keep synthesizing
+(`TTS_LOOKAHEAD_CAP_MS` in server.py). Without it the server likely saw
+playback as stuck at position 0 indefinitely and capped its own lookahead
+accordingly - a strong candidate for exactly the "second sentence stalls"
+symptom, not something any client-side buffering trick could paper over
+since the server itself was the one holding back. `TtsSpeaker` now runs
+the identical 500ms reporting loop `ReadAloudController.streamText()`
+already has.
+
+`OverlayIndicator` is a small floating banner ("Read Aloud: generating
+audio...") shown whenever nothing is queued to play - driven by
+`TtsPlaybackService.HighlightListener`'s existing `onSentenceEnd()`/
+`onSentenceStart()`/`onQueueIdle()` callbacks (already there for
+newsdigest-android's own word-highlighting; not previously used by this
+project at all). Uses `TYPE_ACCESSIBILITY_OVERLAY`, which needs a context
+that IS a live, bound `AccessibilityService` - routed through
+`ReadAloudAccessibilityService.instance` specifically so it works
+identically whether the read was triggered from the corner-swipe path or
+`RedditShareActivity`'s Share path, since the accessibility service
+singleton is available either way.
+
+**Not built yet, discussed:** an explicit contextual menu (e.g. Gmail:
+"read this email" vs "read the whole inbox") - noted that the inbox-vs-
+single-email distinction may already happen implicitly today, purely
+based on which Gmail screen you're on when Read Aloud is invoked (the
+inbox list already reads as a rundown of every visible row). A real
+menu would need an interactive overlay Activity (the same translucent-
+overlay pattern dictate-android's own AssistActivity already uses, not
+OverlayIndicator's passive, untouchable banner), shown only for a profile
+that declares more than one mode.
+
 ## TTS
 
 Streams to the *existing* `newsdigest-server` (`10.10.0.2:8792`,

@@ -26,22 +26,99 @@ object AccessibilityTree {
      * isn't actually there to read. */
     fun collectText(root: AccessibilityNodeInfo): List<String> {
         val out = mutableListOf<String>()
-        walk(root, out)
+        walk(root, emptyMap(), out)
         return dedupeAdjacent(out)
     }
 
-    private fun walk(node: AccessibilityNodeInfo, out: MutableList<String>) {
+    /** Same walk, but a leaf's own text gets prefixed "Label: " when its
+     * resource-id (last path segment, e.g. "sender_name" for
+     * "com.google.android.gm:id/sender_name") is a key in `labelsByResId`
+     * - asked for explicitly for Gmail's open-email screen, where
+     * "Subject"/"From" aren't otherwise announced as such (confirmed
+     * live: `subject_and_folder_view` and `sender_name` are genuinely
+     * separate leaf nodes there, unlike the inbox list's rows, which
+     * already read fine as one atomic content-desc and are untouched by
+     * this - a label with no match just falls through to plain text,
+     * same as collectText()). One shared walk() for both entry points
+     * deliberately - confirmed live 2026-09-13 that having this as a
+     * separate near-duplicate function meant a fix to one (the chrome
+     * filter below) silently didn't apply to the other, since
+     * GmailProfile calls this one, not collectText(). */
+    fun collectTextWithLabels(root: AccessibilityNodeInfo, labelsByResId: Map<String, String>): List<String> {
+        val out = mutableListOf<String>()
+        walk(root, labelsByResId, out)
+        return dedupeAdjacent(out)
+    }
+
+    private fun walk(node: AccessibilityNodeInfo, labels: Map<String, String>, out: MutableList<String>) {
         if (!node.isVisibleToUser) return
+        if (isChrome(node)) return
         val desc = node.contentDescription?.toString()?.trim()
         if (!desc.isNullOrBlank()) {
             out.add(desc)
             return // atomic announcement -- see class doc, don't also read the children
         }
         val text = node.text?.toString()?.trim()
-        if (!text.isNullOrBlank()) out.add(text)
-        for (i in 0 until node.childCount) {
-            node.getChild(i)?.let { walk(it, out) }
+        if (!text.isNullOrBlank()) {
+            val resId = node.viewIdResourceName?.substringAfterLast('/')
+            val label = resId?.let { labels[it] }
+            out.add(if (label != null) "$label: $text" else text)
         }
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { walk(it, labels, out) }
+        }
+    }
+
+    // Class names common to icon-only action buttons (a toolbar's Reply/
+    // Archive/Star/overflow icons).
+    private val CONTROL_CLASSES = setOf(
+        "android.widget.Button", "android.widget.ImageButton", "android.widget.ImageView",
+        "android.widget.FrameLayout", "android.widget.ImageSwitcher", "android.widget.CheckBox",
+        "android.widget.Switch", "android.widget.ToggleButton", "android.widget.LinearLayout",
+    )
+
+    /** Reported live 2026-09-13: reading an open Gmail email spoke toolbar
+     * button labels ("emoji reaction", "forward", "share") right alongside
+     * the actual message. Confirmed against a real dump of that exact
+     * screen (docs/design.md) that these buttons come in two shapes,
+     * needing two independent rules - either alone is enough:
+     *
+     * 1. A resource-id containing "button" (`reply_button`,
+     *    `reply_all_button_text`, `forward_button_text`, ...) -
+     *    deliberately NOT gated on isClickable: confirmed live that
+     *    "Reply all"/"Forward" are TextView labels with clickable=false
+     *    sitting inside a separately-clickable container, so requiring
+     *    the label node itself to be clickable would miss them.
+     * 2. A clickable node with no visible .text, whose only label is a
+     *    short (<=4 word) content-desc, on one of the common icon-control
+     *    classes above (catches "Navigate up", "More options", "Add
+     *    star", "Add emoji reaction", "Archive", "Delete" - icon-only
+     *    buttons with no separate text at all).
+     *
+     * A node matching either is skipped entirely, children included - a
+     * button's children are never meaningful content of their own.
+     * Known-imperfect heuristic, not a certainty - refine as false
+     * positives/negatives turn up, same as GmailProfile's own
+     * STOP_MARKERS. */
+    // Resource-id naming conventions that mean "this is a UI control, not
+    // content" regardless of word count - added "badge" 2026-09-13 after
+    // "Show contact information for Rejane Salgado" (Gmail's
+    // contact_badge icon) leaked through: its content-desc template
+    // appends the sender's name, which defeats a raw word-count cutoff
+    // once the name itself is multiple words.
+    private val CHROME_ID_SUBSTRINGS = listOf("button", "badge")
+
+    private fun isChrome(node: AccessibilityNodeInfo): Boolean {
+        val resId = node.viewIdResourceName?.substringAfterLast('/')?.lowercase()
+        if (resId != null && CHROME_ID_SUBSTRINGS.any { resId.contains(it) }) return true
+        if (!node.isClickable) return false
+        val text = node.text?.toString()?.trim()
+        val desc = node.contentDescription?.toString()?.trim()
+        if (text.isNullOrBlank() && !desc.isNullOrBlank() && node.className in CONTROL_CLASSES) {
+            val wordCount = desc.trim().split(Regex("\\s+")).size
+            if (wordCount <= 4) return true
+        }
+        return false
     }
 
     /** Some apps (Gmail's WebView email body among them) repeat the exact
@@ -60,40 +137,6 @@ object AccessibilityTree {
             out.add(s)
         }
         return out
-    }
-
-    /** Same rule as collectText(), but a leaf's own text gets prefixed
-     * "Label: " when its resource-id (last path segment, e.g.
-     * "sender_name" for "com.google.android.gm:id/sender_name") is a key
-     * in `labelsByResId` - asked for explicitly for Gmail's open-email
-     * screen, where "Subject"/"From" aren't otherwise announced as such
-     * (confirmed live: `subject_and_folder_view` and `sender_name` are
-     * genuinely separate leaf nodes there, unlike the inbox list's rows,
-     * which already read fine as one atomic content-desc and are
-     * untouched by this - a label with no match just falls through to
-     * plain text, same as collectText()). */
-    fun collectTextWithLabels(root: AccessibilityNodeInfo, labelsByResId: Map<String, String>): List<String> {
-        val out = mutableListOf<String>()
-        walkLabeled(root, labelsByResId, out)
-        return dedupeAdjacent(out)
-    }
-
-    private fun walkLabeled(node: AccessibilityNodeInfo, labels: Map<String, String>, out: MutableList<String>) {
-        if (!node.isVisibleToUser) return
-        val desc = node.contentDescription?.toString()?.trim()
-        if (!desc.isNullOrBlank()) {
-            out.add(desc)
-            return
-        }
-        val text = node.text?.toString()?.trim()
-        if (!text.isNullOrBlank()) {
-            val resId = node.viewIdResourceName?.substringAfterLast('/')
-            val label = resId?.let { labels[it] }
-            out.add(if (label != null) "$label: $text" else text)
-        }
-        for (i in 0 until node.childCount) {
-            node.getChild(i)?.let { walkLabeled(it, labels, out) }
-        }
     }
 
     /** First node (depth-first) whose own text or content-desc matches

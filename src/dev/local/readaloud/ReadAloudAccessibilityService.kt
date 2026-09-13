@@ -101,6 +101,7 @@ class ReadAloudAccessibilityService : AccessibilityService() {
             try { GenericProfile.extract(this, root) } catch (_: Exception) { emptyList() }
         }
         val text = lines.joinToString("\n").trim()
+        Log.i(TAG, "extracted ${text.length} chars: ${text.take(300)}${if (text.length > 300) "…" else ""}")
         if (text.isBlank()) { toast("Nothing readable found on screen"); return }
         toast("Reading ${labelFor(pkg)}…")
         TtsSpeaker.speak(this, labelFor(pkg), text)

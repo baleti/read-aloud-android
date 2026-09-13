@@ -30,6 +30,30 @@ import android.view.accessibility.AccessibilityNodeInfo
 object GmailProfile : AppProfile {
     override val packageName: String = "com.google.android.gm"
 
+    // Confirmed live 2026-09-13: `subject_and_folder_view` bakes the
+    // folder/category chips directly onto the end of the subject's own
+    // .text, no separator - "...vps-af1b0c30.vps.ovh.net Inbox primary"
+    // for an email in both the Inbox location and Primary category tab.
+    // Not a separate node this project's usual isChrome() filtering can
+    // catch (see AccessibilityTree.kt) - it's baked into the same string
+    // as real subject content, so this strips a trailing run of Gmail's
+    // own known category/location words instead. Known-imperfect: a
+    // subject that genuinely ends in one of these exact words (rare)
+    // would get over-trimmed - same class of tradeoff as STOP_MARKERS
+    // below, refine as real cases turn up.
+    private val KNOWN_LABELS = setOf(
+        "inbox", "primary", "social", "promotions", "updates", "forums",
+        "starred", "important", "sent", "drafts", "spam", "trash", "personal",
+    )
+
+    private fun stripTrailingLabels(subjectLine: String): String {
+        val words = subjectLine.trim().split(Regex("\\s+")).toMutableList()
+        while (words.isNotEmpty() && words.last().lowercase().trim(',', '.') in KNOWN_LABELS) {
+            words.removeAt(words.size - 1)
+        }
+        return words.joinToString(" ")
+    }
+
     private val STOP_MARKERS = listOf(
         "legal notices", "unsubscribe", "twitter", "facebook", "instagram",
         "linkedin", "youtube", "help centre", "guides & faq", "community forum",
@@ -54,7 +78,12 @@ object GmailProfile : AppProfile {
         // footer starting.
         var seenUnsubscribeOnce = false
         val out = mutableListOf<String>()
-        for (line in all) {
+        for (rawLine in all) {
+            val line = if (rawLine.startsWith("Subject: ")) {
+                "Subject: " + stripTrailingLabels(rawLine.removePrefix("Subject: "))
+            } else {
+                rawLine
+            }
             val lower = line.lowercase()
             val isFooterMarker = STOP_MARKERS.any { marker ->
                 if (marker == "unsubscribe") {
