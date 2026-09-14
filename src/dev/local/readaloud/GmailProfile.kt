@@ -166,7 +166,7 @@ object GmailProfile : AppProfile {
                 val root = service.findForegroundWithRetry(packageName)?.second
                 if (root == null || !isOpenEmailScreen(root)) { service.toast("No email is open"); return true }
                 val fullyExpanded = expandAllMessages(service, root)
-                val lines = try { extract(service, fullyExpanded, "this_email") } catch (e: Exception) { emptyList() }
+                val lines = try { extractThreadScrolling(service, fullyExpanded) } catch (e: Exception) { emptyList() }
                 val text = lines.joinToString("\n").trim()
                 Log.i(TAG, "read_all: ${text.length} chars, ${lines.count { it.startsWith("From: ") }} From: lines")
                 if (text.isBlank()) { service.toast("Nothing readable found on screen"); return true }
@@ -177,7 +177,7 @@ object GmailProfile : AppProfile {
                 val root = service.findForegroundWithRetry(packageName)?.second
                 if (root == null || !isOpenEmailScreen(root)) { service.toast("No email is open"); return true }
                 val fullyExpanded = expandAllMessages(service, root)
-                val lines = try { extract(service, fullyExpanded, "this_email") } catch (e: Exception) { emptyList() }
+                val lines = try { extractThreadScrolling(service, fullyExpanded) } catch (e: Exception) { emptyList() }
                 val fromIndices = lines.withIndex().filter { it.value.startsWith("From: ") }.map { it.index }
                 if (fromIndices.isEmpty()) { service.toast("No messages found"); return true }
                 // Label each message "Sender - Date" straight from extract()'s
@@ -441,6 +441,28 @@ object GmailProfile : AppProfile {
     // what was actually a real, resolvable message right behind it.
     private val EMPTY_HEADER_REGEX = Regex("""^m#msg-f:\d+-header$""")
 
+    /** The container to scroll for "reveal more of THIS thread" - never
+     * a fixed class name: confirmed live 2026-09-14 that whether a
+     * thread's vertical scroll container is a plain `ScrollView` or
+     * something else (a message body rendered as a WebView reported
+     * `scrollable=true` too, in a state where no ScrollView existed in
+     * the tree at all) varies with what's actually expanded/rendered at
+     * the moment - a hardcoded className check silently found nothing at
+     * all in that state. `AccessibilityTree.largestScrollable()` (used
+     * elsewhere for exactly this "guess the main scrollable area"
+     * purpose) isn't safe to reuse as-is here, though: `item_pager` (the
+     * HORIZONTAL conversation-to-conversation pager - see
+     * expandAllMessages()'s own doc for why scrolling THAT one is a real,
+     * previously-hit bug) is almost always the single largest-by-area
+     * scrollable node on this screen, so a plain largest-by-area pick
+     * would choose it every time. Explicitly excluded by id instead. */
+    private fun threadScrollContainer(root: AccessibilityNodeInfo): AccessibilityNodeInfo? =
+        AccessibilityTree.findAllNodes(root) { it.isScrollable && it.viewIdResourceName?.endsWith("item_pager") != true }
+            .maxByOrNull { node ->
+                val r = Rect(); node.getBoundsInScreen(r)
+                r.width().toLong() * r.height().toLong()
+            }
+
     private fun collapsedMessageTarget(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         // Path 1: a still-collapsed card with a real `email_snippet` -
         // walk up to its `upper_header` (the snippet/sender text itself
@@ -506,7 +528,7 @@ object GmailProfile : AppProfile {
             target.getBoundsInScreen(bounds)
             if (bounds.isEmpty) {
                 Log.i(TAG, "expandAllMessages[$iteration]: next message off-screen, scrolling")
-                val scrollView = AccessibilityTree.findNode(current) { it.className == "android.widget.ScrollView" }
+                val scrollView = threadScrollContainer(current)
                 if (scrollView == null || !service.scrollForward(scrollView)) return current
                 Thread.sleep(400)
                 current = service.foregroundRoot()?.second ?: return current
@@ -539,6 +561,84 @@ object GmailProfile : AppProfile {
         return current
     }
 
+    private const val MAX_THREAD_SCROLLS = 20
+
+    /** Reads a long, multi-message thread's real content top-to-bottom by
+     * scrolling and accumulating, not one single tree walk - confirmed
+     * live 2026-09-14 that a single extract() call on an already-fully-
+     * (or mostly-)expanded thread still only captured 2 of 6 messages'
+     * worth of text, unchanged by the STOP_MARKERS footer-trim fix from
+     * the night before (which turned out not to be the cause at all).
+     * The real reason: `collectText()`/`collectTextWithLabels()` have
+     * ALWAYS - correctly, by original design - skipped anything not
+     * currently `isVisibleToUser`. `expandAllMessages()` getting a
+     * message's real content into the DOM doesn't mean that content is
+     * still on SCREEN by the time extraction runs - it's usually been
+     * pushed well below the fold by everything expanded above it, and
+     * `expandAllMessages()` never scrolls back afterward. Same shape of
+     * fix as RedditProfile's own scroll-and-accumulate loop for its feed:
+     * scroll to the top first (expandAllMessages leaves the scroll
+     * position wherever its last click/scroll landed, not at the start),
+     * then repeatedly capture the currently-visible labeled text and
+     * scroll forward, deduping via a LinkedHashSet (same tradeoff Reddit's
+     * version already accepts - a short boilerplate line like "to X, Y,
+     * Z" repeating verbatim across messages collapses to one occurrence,
+     * which costs far less than the alternative of not deduping real
+     * overlap between consecutive scroll steps at all). */
+    private fun extractThreadScrolling(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String> {
+        var current = root
+        run {
+            var tries = 0
+            var lastFingerprint: String? = null
+            var stagnant = 0
+            while (tries < MAX_THREAD_SCROLLS && stagnant < 2) {
+                val sv = threadScrollContainer(current) ?: break
+                if (!service.scrollBackward(sv)) break
+                Thread.sleep(300)
+                current = service.foregroundRoot()?.second ?: break
+                tries++
+                // Same idea as the forward pass' stagnant-pass check below,
+                // just using the raw joined text as a cheap fingerprint
+                // (no LinkedHashSet needed here - this phase only cares
+                // "did the screen change at all", not what's on it) -
+                // stops as soon as further backward scrolling stops
+                // changing anything (genuinely at the top) instead of
+                // always spending the full MAX_THREAD_SCROLLS budget here
+                // even when 2-3 scrolls were actually enough.
+                val fingerprint = AccessibilityTree.collectText(current).joinToString("|")
+                stagnant = if (fingerprint == lastFingerprint) stagnant + 1 else 0
+                lastFingerprint = fingerprint
+            }
+        }
+        val seen = LinkedHashSet<String>()
+        fun captureCurrent() {
+            AccessibilityTree.collectTextWithLabels(current, FIELD_LABELS).forEach { line ->
+                seen.add(
+                    if (line.startsWith("Subject: ")) "Subject: " + stripTrailingLabels(line.removePrefix("Subject: "))
+                    else line,
+                )
+            }
+        }
+        captureCurrent()
+        Log.i(TAG, "extractThreadScrolling: initial capture size=${seen.size}")
+        var scrolls = 0
+        var stagnantPasses = 0
+        while (scrolls < MAX_THREAD_SCROLLS && stagnantPasses < 2) {
+            val beforeSize = seen.size
+            val sv = threadScrollContainer(current) ?: break
+            val ok = service.scrollForward(sv)
+            Log.i(TAG, "extractThreadScrolling: scrollForward[$scrolls] ok=$ok")
+            if (!ok) break
+            scrolls++
+            Thread.sleep(300)
+            current = service.foregroundRoot()?.second ?: break
+            captureCurrent()
+            Log.i(TAG, "extractThreadScrolling: after scroll $scrolls, size=${seen.size} (was $beforeSize)")
+            stagnantPasses = if (seen.size == beforeSize) stagnantPasses + 1 else 0
+        }
+        return seen.toList()
+    }
+
     /** Reads only the messages the user picked in MessagePickerActivity.
      * Reuses extract()'s own (already-tested) full-thread walk rather
      * than a second, parallel per-container extraction path: each
@@ -552,7 +652,7 @@ object GmailProfile : AppProfile {
         val root = service.findForegroundWithRetry(packageName)?.second
         if (root == null || !isOpenEmailScreen(root)) { service.toast("No email is open"); return }
         val fullyExpanded = expandAllMessages(service, root)
-        val lines = try { extract(service, fullyExpanded, "this_email") } catch (e: Exception) { emptyList() }
+        val lines = try { extractThreadScrolling(service, fullyExpanded) } catch (e: Exception) { emptyList() }
         if (lines.isEmpty()) { service.toast("Nothing readable found on screen"); return }
         val fromIndices = lines.withIndex().filter { it.value.startsWith("From: ") }.map { it.index }
         if (fromIndices.isEmpty()) { service.toast("Couldn't tell messages apart"); return }

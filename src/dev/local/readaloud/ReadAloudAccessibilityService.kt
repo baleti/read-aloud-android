@@ -359,6 +359,22 @@ class ReadAloudAccessibilityService : AccessibilityService() {
         return swipe(x, y1, x, y2)
     }
 
+    /** The reverse of scrollForward() - used by GmailProfile to scroll a
+     * long, freshly-fully-expanded thread back to the top before reading
+     * it top-to-bottom (expandAllMessages() leaves the scroll position
+     * wherever its last click/scroll landed, usually well down the
+     * thread, not at the start). */
+    fun scrollBackward(node: AccessibilityNodeInfo): Boolean {
+        if (node.isScrollable && node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)) return true
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        if (bounds.height() < 100) return false
+        val x = bounds.exactCenterX()
+        val y1 = bounds.top + bounds.height() * 0.25f
+        val y2 = bounds.top + bounds.height() * 0.75f
+        return swipe(x, y1, x, y2)
+    }
+
     /** Blocking (caller must be off the main thread -- ReadAloudService
      * always drives extraction from a background thread): synthesizes a
      * single tap and waits for it to actually complete before returning,

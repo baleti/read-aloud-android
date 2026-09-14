@@ -608,9 +608,34 @@ visibility theory holds, is a scroll-and-accumulate extraction loop
 for a multi-message thread (walk the tree, scroll down, walk again,
 merge, repeat until the bottom) - the same shape of pattern
 RedditProfile's own feed-scrolling already uses, not a one-line fix.
-Ship tomorrow morning as: the chooser and expansion mechanics are
-solid and regression-tested, but "Read all"/"Read selected" on a long
-(4+ message) thread may only capture the first couple of messages'
-content - worth a fresh, focused debugging pass (with fresh eyes and
-a bit more time) before calling this feature complete, not a "trust it
-fully" state yet.
+**Update, 2026-09-14 morning, after the user caught this in real use**
+(overstated as "resolved" the night before - it wasn't; corrected):
+the visibility theory was right. Added `extractThreadScrolling()` -
+scrolls to the top first (stagnant-fingerprint-detected, not a fixed
+iteration count - cut this phase from ~10s to under 1s), then
+scrolls forward accumulating `collectTextWithLabels()` output into a
+`LinkedHashSet` (same tradeoff RedditProfile's own version already
+accepts) until two consecutive scrolls add nothing new. Real
+complication along the way: the container to scroll isn't reliably a
+fixed class - confirmed live a `ScrollView` was sometimes entirely
+ABSENT from the tree in a state where a message body happened to
+render as a `WebView` instead, which also reports `scrollable=true`.
+`AccessibilityTree.largestScrollable()` (used elsewhere for exactly
+this) isn't safe to reuse as-is here either: `item_pager` (the
+HORIZONTAL conversation-pager - see expandAllMessages()'s own doc for
+why scrolling THAT one is a distinct, already-fixed bug) is almost
+always the single largest-by-area scrollable node on this screen, so a
+plain largest-by-area pick chooses it every time. `threadScrollContainer()`
+explicitly excludes it by id before picking the largest of what's left.
+
+Net result on the real 6-message test thread: 2 of 6 messages captured
+-> 4 of 6, real measured improvement, verified live. Still not all 6 -
+consistent with `expandAllMessages()` itself still stalling at "1
+remaining" (a real message that never gets expanded into the DOM at
+all can't be captured by ANY extraction approach, scrolling or not),
+plus possibly one more falling into the same "Gmail omits a repeated
+sender's own label" gap `readSelectedMessages()`'s own doc already
+describes. Report to the user as: real, verified progress (not just a
+diagnosis this time), but still short of "every message every time" on
+a long thread - the remaining gap is now narrowly scoped to
+`expandAllMessages()`'s own completion rate, not extraction.
