@@ -468,6 +468,68 @@ blockers, not something more retrying fixes. If a Play-certified
 system image or a real device becomes available later, this is worth
 retrying rather than treating as permanently closed.
 
+## Update, 2026-09-14: Reddit works after all - via the browser, not the app
+
+The user pushed back on giving up here ("reddit is important to get
+right", "could we go around Google Play Integrity"). Researched it
+properly first (web search): hardware-backed Play Integrity checks are
+confirmed NOT bypassable on an emulator by any means, including a
+rooted image + Magisk + Play Integrity Fix - that whole toolchain
+exists for a REAL rooted device pretending to be unrooted, not an
+emulator pretending to be real hardware at all, since the check is a
+server-side verification against a hardware attestation key emulators
+fundamentally don't possess. Switching system images would not have
+helped.
+
+The actual unlock: the native APP's login is what was hitting Play
+Integrity - reddit.com's own WEB login is a completely different code
+path that never touches Android's Play Integrity API at all. Confirmed
+this distinction matters live, the hard way:
+
+1. Native app + Google Sign-In: reaches Google's real account picker,
+   but Reddit's OWN backend rejects it after a valid credential comes
+   back ("We were unable to authenticate you") - this is very likely
+   where the app-side Play Integrity attestation gets checked.
+2. Native app + magic link (emailed to the account, opened via Gmail
+   which deep-links straight into the Reddit app since it owns the
+   verified App Link for reddit.com): failed twice with a different,
+   more generic "Something went wrong" - once on a value first click,
+   once on a since-consumed single-use token on retry. Consistent with
+   the same app-side rejection, just a different failure surface.
+3. reddit.com/login in Chrome + "Continue with Google": the FIRST
+   attempt (via Chrome's one-tap account-picker sheet) hit a real but
+   DIFFERENT error - "400, malformed request" at
+   accounts.google.com/gis_trans - a technical OAuth/FedCM
+   compatibility issue, not a fraud rejection. Confirms this path
+   genuinely avoids whatever the app-side check was.
+4. Reloading reddit.com/login fresh: Chrome now offered a persisted
+   "Continue as a / <email>" one-tap row (session state left over from
+   attempt 3). Tapping it went through Google's account-chooser page
+   ONE more time and this time completed cleanly - "Logged in as
+   Ok_Armadillo_6015" toast, real logged-in feed loaded (r/Architects,
+   r/ArchitecturalRevival posts, real vote counts).
+
+Confirmed the actual read-aloud goal works end to end from here: with
+zero Reddit-specific code (GenericProfile alone, same as Wikipedia/
+Feeder earlier), triggering Read Aloud on the logged-in reddit.com feed
+in Chrome correctly extracted the real post title, subreddit, and
+comment count ("Tower College school, near Liverpool, England",
+"r/ArchitecturalRevival", "7 Go to comments") - same "real page-chrome
+noise" tradeoff already documented for Wikipedia (some of Reddit's own
+action buttons - "Upvote", "Repost", "Share", "Open overflow menu" -
+read alongside the post, not filtered, since AccessibilityTree's
+existing isChrome() heuristic is built around Android-native icon-only
+buttons with no visible text, not a web page's own labeled buttons).
+Login persists via Chrome's normal cookie storage - durable across app
+restarts, not a one-off state that needs redoing.
+
+Net effect: Reddit is usable for the actual read-aloud goal today, via
+Chrome, no native app, no Play Integrity workaround needed or possible.
+A future `ChromeProfile`/web-specific chrome filter (see the "Feeder
+and Chrome" section above for why this wasn't attempted generally) is
+the natural next refinement if Reddit-via-browser turns out to be the
+long-term path rather than a one-off unblock.
+
 ## Feeder and Chrome: GenericProfile handles both, zero new code (2026-09-13)
 
 Tested two more apps against the existing `GenericProfile` (no
