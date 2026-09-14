@@ -701,3 +701,59 @@ describes. Report to the user as: real, verified progress (not just a
 diagnosis this time), but still short of "every message every time" on
 a long thread - the remaining gap is now narrowly scoped to
 `expandAllMessages()`'s own completion rate, not extraction.
+
+## Gmail: two real causes of "emails skipped altogether" (2026-09-14)
+
+The user separately flagged, in passing, that some emails were being
+skipped entirely (not misread, just never read at all) during
+inbox-sequence reading ("read inbox from the top" / "onwards" /
+"backwards"), and asked for this to be reproduced and fixed
+proactively. Found two independent, real causes, both in `listRows()`/
+`runInboxSequence()` - neither related to the multi-message-thread work
+above.
+
+1. **`listRows()`'s row filter used `(it.text?.length ?: 0) > 20`** as a
+   proxy for "this is a real inbox row, not a promo card or FAB
+   button." Confirmed live against a real inbox dump (uiautomator) that
+   a genuine row's own `.text` is "Sender, Subject, Snippet" run
+   together with no separator - so a real but terse email (a short
+   sender name plus a short or absent subject/snippet) can legitimately
+   fall under 20 characters, which silently drops it from the row list
+   entirely, not just misorders it. Confirmed the correct, robust
+   signal instead: every real row (and only real rows - checked against
+   the same dump's promo cards/buttons, none of which have this) wraps
+   a `viewified_conversation_item_view` descendant, regardless of how
+   short its own text is. `listRows()` now checks for that structurally
+   first, falling back to the old length heuristic only if no row
+   matches it at all (a different Gmail build/layout not using this
+   id), rather than assuming this exact id survives forever.
+
+2. **The bigger one**: `runInboxSequence()` tracked a plain incrementing
+   `index` into whatever `listRows()` returned, but `listRows()` only
+   ever sees rows Gmail's RecyclerView currently has RENDERED (a
+   handful - confirmed live exactly 4 on a real inbox screen), and nothing
+   in the loop ever scrolled the list. The moment `index` exceeded the
+   number of on-screen rows, `index !in rows.indices` fired and reported
+   "Reached the end of the inbox" - indistinguishable, from the user's
+   side, from genuinely finishing the whole inbox, even though real
+   unread mail sat below the fold the whole time. Verified live: on a
+   real inbox where only 4 rows fit on screen, the sequence continued
+   correctly straight through email 5 and email 6 (a real, unrelated
+   personal email dated 3 days earlier, confirmed via screenshot) -
+   both of which the old code would have missed entirely and reported
+   as "end of inbox" after only 4.
+
+   Fixed by replacing the numeric index with a content anchor: instead
+   of `rows[index]`, `locateNextRow()` re-finds the PREVIOUSLY opened
+   row by matching its own remembered `.text` among whatever's
+   currently rendered, then takes the immediate neighbor (by top
+   position) in the requested direction - scrolling
+   (`AccessibilityTree.largestScrollable()`, up to `MAX_INBOX_SCROLLS`
+   attempts) if that anchor row isn't currently on screen at all. This
+   survives however many rows have scrolled past without needing to
+   track a scroll offset directly. The very first step of a sequence
+   still uses a plain numeric position (`pendingIndex`) exactly as
+   before - safe because that row is guaranteed to already be on screen
+   at that point (row 0 of a freshly-opened inbox, or - for onwards/
+   backwards - the just-closed email's own row, already located within
+   the same on-screen snapshot by `findCurrentRowIndex()`).

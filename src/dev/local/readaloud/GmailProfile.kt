@@ -111,14 +111,42 @@ object GmailProfile : AppProfile {
     // live against a real 8-email inbox) - sorted by on-screen vertical
     // position since that's the one thing guaranteed to match reading
     // order regardless of document-tree quirks.
-    private fun listRows(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> =
-        AccessibilityTree.findAllNodes(root) {
-            it.className == "android.widget.FrameLayout" && it.isClickable && (it.text?.length ?: 0) > 20
-        }.sortedBy {
+    //
+    // The identifying check used to be `(it.text?.length ?: 0) > 20` - a
+    // guess at "long enough to be a real row, not a promo card/FAB button".
+    // Root-caused live 2026-09-14 as the actual explanation for a real
+    // report ("some emails were being skipped altogether, not read at
+    // all"): a genuine inbox row with a short sender+subject+snippet
+    // combination (a terse automated notification, or an unread thread
+    // with no snippet text at all) can land under 20 characters, which
+    // silently drops it from this list with no error - it's not
+    // "shorter", it's ABSENT, which shifts every later index down by one
+    // and permanently removes that email from onwards/backwards/top
+    // reading sequences. Replaced with a structural check instead: every
+    // real row (confirmed against a live 4-row inbox dump, exactly the 4
+    // real emails and none of the 2 other clickable FrameLayouts - the
+    // Meet FAB and the account-switcher disc) wraps a
+    // `viewified_conversation_item_view` descendant, regardless of how
+    // short its own text is. Falls back to the old length heuristic only
+    // if that id isn't found at all (a different Gmail build/layout that
+    // doesn't use it) rather than assuming every future Gmail version
+    // keeps this exact id forever.
+    private fun listRows(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        val structural = AccessibilityTree.findAllNodes(root) {
+            it.className == "android.widget.FrameLayout" && it.isClickable &&
+                AccessibilityTree.findNode(it) { c -> c.viewIdResourceName?.endsWith("viewified_conversation_item_view") == true } != null
+        }
+        val rows = structural.ifEmpty {
+            AccessibilityTree.findAllNodes(root) {
+                it.className == "android.widget.FrameLayout" && it.isClickable && (it.text?.length ?: 0) > 20
+            }
+        }
+        return rows.sortedBy {
             val r = Rect()
             it.getBoundsInScreen(r)
             r.top
         }
+    }
 
     override fun modes(root: AccessibilityNodeInfo): List<AppProfile.Mode> {
         return if (isOpenEmailScreen(root)) {
@@ -261,18 +289,73 @@ object GmailProfile : AppProfile {
         return chosen.index
     }
 
-    /** The actual loop: make sure we're on the list, tap the row at
-     * `index`, wait for it to open, read it (blocking until playback
+    private const val MAX_INBOX_SCROLLS = 15
+
+    /** Finds the row to open next. The very first step (`lastRowText ==
+     * null`) uses `pendingIndex` (a plain position within whatever's
+     * currently rendered) exactly like before - safe because that row is
+     * guaranteed already on screen at that point (either it's literally
+     * row 0 of a freshly-opened inbox, or - for onwards/backwards - the
+     * just-closed email's own row, which findCurrentRowIndex() just
+     * located in the very listRows() snapshot taken right after backing
+     * out of it).
+     *
+     * Every step after that anchors on the PREVIOUSLY opened row's own
+     * text instead of a numeric position - root-caused live 2026-09-14 as
+     * the real explanation for a report of emails being "skipped
+     * altogether, not read at all": listRows() only ever sees whatever
+     * Gmail's RecyclerView currently has rendered (a handful of rows), and
+     * this loop never scrolled it at all, so a plain `index += direction`
+     * ran off the end of the ON-SCREEN rows - not the real inbox - the
+     * moment there were more emails than fit on one screen, reporting
+     * "Reached the end of the inbox" while most of it was never even
+     * looked at. Re-finding the last row by its own text and scrolling
+     * (same scroll-and-retry shape as expandAllMessages()/
+     * extractThreadScrolling() elsewhere in this file) survives however
+     * many rows have scrolled past, since it never depends on how many
+     * rows happen to be simultaneously rendered. */
+    private fun locateNextRow(
+        service: ReadAloudAccessibilityService,
+        root: AccessibilityNodeInfo,
+        lastRowText: String?,
+        pendingIndex: Int?,
+        direction: Int,
+    ): AccessibilityNodeInfo? {
+        if (lastRowText == null) return listRows(root).getOrNull(pendingIndex ?: 0)
+        var current = root
+        repeat(MAX_INBOX_SCROLLS) {
+            val rows = listRows(current)
+            val anchorIdx = rows.indexOfFirst { (it.text?.toString() ?: "") == lastRowText }
+            if (anchorIdx != -1) {
+                val neighbor = rows.getOrNull(anchorIdx + direction)
+                if (neighbor != null) {
+                    val b = Rect()
+                    neighbor.getBoundsInScreen(b)
+                    if (!b.isEmpty) return neighbor
+                }
+            }
+            val listView = AccessibilityTree.largestScrollable(current) ?: return null
+            val scrolled = if (direction > 0) service.scrollForward(listView) else service.scrollBackward(listView)
+            if (!scrolled) return null
+            Thread.sleep(300)
+            current = service.foregroundRoot()?.second ?: return null
+        }
+        return null
+    }
+
+    /** The actual loop: make sure we're on the list, tap the next row (see
+     * locateNextRow's own doc for how "next" is found without a raw
+     * index), wait for it to open, read it (blocking until playback
      * finishes - must not open the next email while this one is still
-     * being spoken), step `index` by `direction`, repeat. Stops on
-     * reaching either end of the list, MAX_SEQUENCE_EMAILS, or a fresh
-     * Read Aloud invocation superseding this one (checked via
-     * isSuperseded() before and after every blocking step - the whole
-     * reason that generation counter exists). */
+     * being spoken), repeat. Stops on reaching either end of the list,
+     * MAX_SEQUENCE_EMAILS, or a fresh Read Aloud invocation superseding
+     * this one (checked via isSuperseded() before and after every blocking
+     * step - the whole reason that generation counter exists). */
     private fun runInboxSequence(service: ReadAloudAccessibilityService, startIndex: Int, direction: Int, label: String) {
         val generation = service.currentGeneration()
         val startedAtMs = System.currentTimeMillis()
-        var index = startIndex
+        var pendingIndex: Int? = startIndex
+        var lastRowText: String? = null
         var steps = 0
         while (steps < MAX_SEQUENCE_EMAILS) {
             if (service.isSuperseded(generation)) return
@@ -293,13 +376,15 @@ object GmailProfile : AppProfile {
                 return
             }
 
-            val rows = listRows(root)
-            Log.i(TAG, "runInboxSequence: rows=${rows.size} index=$index step=$steps")
-            if (index !in rows.indices) {
-                service.toast(if (index < 0) "Reached the top of the inbox" else "Reached the end of the inbox")
+            val target = locateNextRow(service, root, lastRowText, pendingIndex, direction)
+            pendingIndex = null
+            Log.i(TAG, "runInboxSequence: step=$steps target=${target != null}")
+            if (target == null) {
+                service.toast(if (direction < 0) "Reached the top of the inbox" else "Reached the end of the inbox")
                 return
             }
-            if (!service.click(rows[index])) {
+            val targetText = target.text?.toString() ?: ""
+            if (!service.click(target)) {
                 service.toast("Couldn't open the next email")
                 return
             }
@@ -322,7 +407,7 @@ object GmailProfile : AppProfile {
                 TtsSpeaker.speak(service, label, text, waitUntilPlaybackDone = true)
             }
 
-            index += direction
+            lastRowText = targetText
         }
         service.toast("Stopped after $MAX_SEQUENCE_EMAILS emails")
     }
