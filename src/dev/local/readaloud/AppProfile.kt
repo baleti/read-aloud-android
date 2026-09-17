@@ -71,6 +71,7 @@ object AppProfileRegistry {
         GmailProfile,
         RedditProfile,
         OutlookProfile,
+        WhatsAppProfile,
     ).associateBy { it.packageName }
 
     /** Never returns null -- GenericProfile is the fallback for every

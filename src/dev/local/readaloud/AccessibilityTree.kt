@@ -24,9 +24,9 @@ object AccessibilityTree {
      * Reddit both). Skips anything not currently visible (off-screen
      * virtualized-list items, content behind another window) since it
      * isn't actually there to read. */
-    fun collectText(root: AccessibilityNodeInfo): List<String> {
+    fun collectText(root: AccessibilityNodeInfo, excludeIds: Set<String> = emptySet()): List<String> {
         val out = mutableListOf<String>()
-        walk(root, emptyMap(), out)
+        walk(root, emptyMap(), excludeIds, out)
         return dedupeAdjacent(out)
     }
 
@@ -44,17 +44,42 @@ object AccessibilityTree {
      * separate near-duplicate function meant a fix to one (the chrome
      * filter below) silently didn't apply to the other, since
      * GmailProfile calls this one, not collectText(). */
-    fun collectTextWithLabels(root: AccessibilityNodeInfo, labelsByResId: Map<String, String>): List<String> {
+    fun collectTextWithLabels(root: AccessibilityNodeInfo, labelsByResId: Map<String, String>, excludeIds: Set<String> = emptySet()): List<String> {
         val out = mutableListOf<String>()
-        walk(root, labelsByResId, out)
+        walk(root, labelsByResId, excludeIds, out)
         return dedupeAdjacent(out)
     }
 
-    private fun walk(node: AccessibilityNodeInfo, labels: Map<String, String>, out: MutableList<String>) {
+    private fun walk(node: AccessibilityNodeInfo, labels: Map<String, String>, excludeIds: Set<String>, out: MutableList<String>) {
         if (!node.isVisibleToUser) return
         if (isChrome(node)) return
+        // Per-caller id exclusion - added for WhatsApp's own
+        // `status` node (a delivery-tick ImageView whose content-desc is
+        // just "Read"/"Delivered", confirmed against a live conversation
+        // dump sitting right next to every sent message's real text):
+        // unlike CHROME_ID_SUBSTRINGS below (shared by every profile),
+        // this is scoped per-call so a generic word like "status" can't
+        // accidentally swallow real content in some other app where it
+        // means something else entirely.
+        val ownResId = node.viewIdResourceName?.substringAfterLast('/')
+        if (ownResId != null && ownResId in excludeIds) return
+        // The atomic-content-desc rule (see class doc) assumes a content-desc
+        // is a full summary of that node's own children - true for Gmail's
+        // per-row FrameLayout, but confirmed live 2026-09-14 to badly break
+        // WhatsApp's chat list: the ENTIRE list is one RecyclerView whose own
+        // content-desc is a generic a11y hint ("Swipe down to reveal
+        // additional actions"), completely unrelated to its rows' real
+        // content - hitting the atomic-return here discarded every single
+        // contact name/message preview/date in the whole list, leaving only
+        // ~120 chars of surrounding chrome (search bar hint, tab labels). A
+        // node the system marks `isScrollable` is, by nature, a container
+        // for many items its own content-desc could never legitimately
+        // summarize as one string - excluding it from the atomic rule is a
+        // general fix, not a WhatsApp-specific carve-out (still skips
+        // ANNOUNCING that hint, just no longer treats it as a reason to stop
+        // descending into real content).
         val desc = node.contentDescription?.toString()?.trim()
-        if (!desc.isNullOrBlank()) {
+        if (!desc.isNullOrBlank() && !node.isScrollable) {
             out.add(desc)
             return // atomic announcement -- see class doc, don't also read the children
         }
@@ -65,7 +90,7 @@ object AccessibilityTree {
             out.add(if (label != null) "$label: $text" else text)
         }
         for (i in 0 until node.childCount) {
-            node.getChild(i)?.let { walk(it, labels, out) }
+            node.getChild(i)?.let { walk(it, labels, excludeIds, out) }
         }
     }
 

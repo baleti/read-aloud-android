@@ -757,3 +757,83 @@ above.
    at that point (row 0 of a freshly-opened inbox, or - for onwards/
    backwards - the just-closed email's own row, already located within
    the same on-screen snapshot by `findCurrentRowIndex()`).
+
+## WhatsApp: a real profile, plus a general content-desc bug it exposed (2026-09-14/17)
+
+Testing moved to the user's actual daily-driver phone (Pixel 6a, over
+wireless debugging) rather than the emulator, since WhatsApp/Reddit need
+the user's own real logged-in sessions. First finding, before any
+WhatsApp-specific code existed: triggering Read Aloud on WhatsApp's main
+chat list (still just `GenericProfile`) captured only ~120 chars - pure
+UI chrome (search bar hint, tab labels) - with every contact name,
+message preview, and date completely missing. Confirmed via a live
+`uiautomator dump` that the actual cause was general, not
+WhatsApp-specific: the whole chat list is one `RecyclerView`
+(`android:id/list`) whose OWN content-desc is a generic a11y hint
+("Swipe down to reveal additional actions"). `AccessibilityTree.walk()`'s
+atomic-content-desc rule (see its own class doc - built for Gmail's
+per-row containers, where a content-desc genuinely IS a full summary of
+that row's children) fired on this container first and returned before
+ever descending into the real rows underneath - discarding the entire
+list in one step. Fixed generally: a node the system marks `isScrollable`
+is, by nature, a container for many items its own content-desc could
+never legitimately summarize as one string, so it's now excluded from
+the atomic-return rule (still doesn't ANNOUNCE that hint - just no
+longer treats it as a reason to stop descending). Verified live:
+844 chars, every contact name/date/preview present.
+
+**Mid-session correction from the user, live**: triggering Read Aloud on
+the chat list - even with the bug fixed - immediately spoke several
+contacts' real message previews aloud at once, from what's meant to be a
+quick, easy-to-fire corner-swipe gesture. Stopped playback (force-stop;
+the media-session STOP keyevent/action did NOT actually halt it - a real,
+separately-noted gap in TtsPlaybackService's own stop handling worth
+revisiting) and re-enabled the accessibility service (force-stopping an
+app clears it from `enabled_accessibility_services`, confirmed live -
+restored via `settings put secure enabled_accessibility_services`). The
+user then specified the real intended shape: Read Aloud should be inert
+on WhatsApp's main screen entirely, and only work inside an open
+conversation - there, reading FORWARD from wherever the conversation is
+CURRENTLY scrolled to (not the whole history from message one).
+
+Added `WhatsAppProfile` (own file, registered in `AppProfileRegistry`):
+- `isOpenConversation()` detects a conversation screen by the presence
+  of the message compose box (`entry`) - `ReadAloudAccessibilityService`
+  only ever hands a profile package+root, never the foreground Activity
+  class, and `entry` is definitionally absent from the chat list/
+  Updates/Communities/Calls tabs/Settings.
+- `runMode()` toasts "Open a WhatsApp chat to use Read Aloud" and does
+  nothing further when not in a conversation - the actual enforcement
+  point (returning an empty list from `modes()` alone does NOT prevent
+  a read: `ReadAloudAccessibilityService.startReading()` falls back to
+  `DEFAULT_MODE` when `modes()` is empty, same as when it's a single
+  entry - `runMode()`'s own explicit check is what's needed).
+- `extractForwardFromCurrentPosition()`: same scroll-and-accumulate
+  shape as GmailProfile's/RedditProfile's own loops, but deliberately
+  WITHOUT Gmail's initial "scroll to top" phase - the whole point here
+  is starting from wherever the user currently is, not the top of a
+  potentially months-long thread.
+- Confirmed via a live conversation dump that every message bubble
+  (sent or received) is a plain TextView (`message_text`) with real
+  `.text`, so the existing generic walk already picks each one up with
+  no WhatsApp-specific label mapping needed (a group chat's per-message
+  sender name, if present, is just another ordinary TextView). One real,
+  dump-confirmed noise source fixed pre-emptively rather than guessed:
+  a delivery-tick ImageView (`status`) sits next to every sent message
+  with content-desc "Read"/"Delivered"/"Sent" - would have interspersed
+  a spurious line after nearly every sent message. Added a general
+  `excludeIds` parameter to `collectText()`/`collectTextWithLabels()`
+  (default empty, zero effect on Gmail/Reddit/Generic) rather than
+  adding "status" to the shared `CHROME_ID_SUBSTRINGS` list, since that
+  word is common enough it could plausibly mean something else entirely
+  in some other app - scoped the exclusion to WhatsApp's own call only.
+
+**Not yet live-verified** - both test devices went unreachable (emulator
+no longer running; the phone's wireless-debugging port rotates every
+time it's re-enabled, and 3 days passed) before this could be tested
+against a real open conversation. Builds clean. Next session: reconnect,
+install, and confirm against a real multi-message thread that (a) the
+main-screen toast fires correctly and nothing is read, (b) forward-
+scrolling from the current position works and stops at the true bottom,
+and (c) the "status" exclusion actually removes the delivery-tick noise
+rather than something being subtly wrong about the id match.
