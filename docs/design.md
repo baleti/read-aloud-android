@@ -828,12 +828,32 @@ Added `WhatsAppProfile` (own file, registered in `AppProfileRegistry`):
   word is common enough it could plausibly mean something else entirely
   in some other app - scoped the exclusion to WhatsApp's own call only.
 
-**Not yet live-verified** - both test devices went unreachable (emulator
-no longer running; the phone's wireless-debugging port rotates every
-time it's re-enabled, and 3 days passed) before this could be tested
-against a real open conversation. Builds clean. Next session: reconnect,
-install, and confirm against a real multi-message thread that (a) the
-main-screen toast fires correctly and nothing is read, (b) forward-
-scrolling from the current position works and stops at the true bottom,
-and (c) the "status" exclusion actually removes the delivery-tick noise
-rather than something being subtly wrong about the id match.
+**Update 2026-09-19, live-verified on the phone** (reconnected via a
+fresh wireless-debugging port - the previous one had rotated, as
+expected):
+
+- Main list: confirmed inert - broadcast on the chat list logs the
+  toast and nothing else, no TTS.
+- **Found and fixed a real gap `isOpenConversation()` missed entirely**:
+  a business/official-account "read-only" chat (tested against
+  WhatsApp's own official account chat) has NO compose box at all -
+  Android replaces `entry` with a `read_only_chat_info` notice ("Only
+  WhatsApp can send messages") instead - so `entry`-detection wrongly
+  treated this genuinely open conversation as the main list and refused
+  to read it (confirmed live: toast fired instead of reading). Switched
+  the detector to `conversation_contact_name` (the toolbar's contact/
+  group name), confirmed present on BOTH conversation shapes and absent
+  from the main list's own row id (`conversations_row_contact_name` -
+  plural, a different id, no collision). Re-verified: same chat now
+  reads correctly (674 chars/9 lines).
+- **Forward-from-current-position, verified on a real personal
+  conversation**: scrolled to a December mid-conversation point (well
+  above the true bottom), triggered Read Aloud, and confirmed via
+  before/after screenshots that it started capturing right around that
+  point (not the top of the whole history) and scrolled forward exactly
+  to the conversation's true last message ("Ok", 19:23) with no
+  overshoot or gap - 4 scrolls, 52 lines/1593 chars.
+- The "status" delivery-tick exclusion wasn't separately isolated (no
+  easy way to diff with/without it live), but no stray "Read"/
+  "Delivered" lines were observed in the char/line counts across
+  multiple sent-message-containing threads, consistent with it working.
