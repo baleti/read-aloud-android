@@ -48,8 +48,20 @@ object WhatsAppProfile : AppProfile {
 
     private val EXCLUDE_IDS = setOf("status")
 
+    // Originally checked for the message compose box (`entry`) alone -
+    // confirmed live 2026-09-19 this misses a real, common case: a
+    // business/official-account "read-only" chat (e.g. WhatsApp's own
+    // official account) has NO compose box at all - just a
+    // `read_only_chat_info` notice ("Only WhatsApp can send messages") in
+    // its place - so `entry`-detection wrongly treated a genuinely open
+    // conversation as the main list and refused to read it.
+    // `conversation_contact_name` (the toolbar's contact/group name)
+    // is present on BOTH conversation shapes and, checked against the
+    // main chat list's own dump, never appears there (the list's row
+    // name id is the plural `conversations_row_contact_name` - a
+    // different id, no collision) - a more general, single signal.
     private fun isOpenConversation(root: AccessibilityNodeInfo): Boolean =
-        AccessibilityTree.findNode(root) { it.viewIdResourceName?.endsWith("com.whatsapp:id/entry") == true } != null
+        AccessibilityTree.findNode(root) { it.viewIdResourceName?.endsWith("com.whatsapp:id/conversation_contact_name") == true } != null
 
     override fun runMode(service: ReadAloudAccessibilityService, mode: String, label: String): Boolean {
         val root = service.findForegroundWithRetry(packageName)?.second
