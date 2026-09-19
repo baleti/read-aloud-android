@@ -289,12 +289,34 @@ class ReadAloudAccessibilityService : AccessibilityService() {
      * whatever unknown app hits this same wall next doesn't need its own
      * profile written first just to get this far). Returns "" on any
      * failure, same as MlKitOcr.recognize() itself. */
+    /** Confirmed live 2026-09-19 against a real Reddit post whose feature
+     * image was a labeled infographic: the OCR fallback (RedditProfile's
+     * own doc explains why it exists at all) OCRs the RAW, uncropped
+     * screenshot, so the status bar's clock/icons ("22:02 ... X") leaked
+     * into the reading as its own garbled line ahead of the real content.
+     * Cropping off the status bar height (looked up the same way the
+     * platform itself reports it, rather than a hardcoded guess that
+     * would drift across devices/DPIs) removes this specific, easy-to-fix
+     * noise source. The harder, NOT fixed here, problem - the image's own
+     * embedded text (map region names) reading as if it were part of the
+     * post/comment - would need distinguishing "real caption text" from
+     * "text baked into a photo," which is a real project of its own, not
+     * a crop. */
     fun ocrScreenshot(): String {
         val bitmap = captureScreenshot() ?: run {
             Log.w(TAG, "ocrScreenshot: screenshot capture failed")
             return ""
         }
-        return MlKitOcr.recognize(bitmap)
+        val statusBarHeight = resources.getIdentifier("status_bar_height", "dimen", "android")
+            .takeIf { it > 0 }
+            ?.let { resources.getDimensionPixelSize(it) }
+            ?: 0
+        val cropped = if (statusBarHeight in 1 until bitmap.height) {
+            android.graphics.Bitmap.createBitmap(bitmap, 0, statusBarHeight, bitmap.width, bitmap.height - statusBarHeight)
+        } else {
+            bitmap
+        }
+        return MlKitOcr.recognize(cropped)
     }
 
     fun labelFor(pkg: String): String = try {

@@ -857,3 +857,47 @@ expected):
   easy way to diff with/without it live), but no stray "Read"/
   "Delivered" lines were observed in the char/line counts across
   multiple sent-message-containing threads, consistent with it working.
+
+## Reddit on the daily-driver phone: feed works well, comments confirm the known OCR gap (2026-09-19)
+
+Per the user's own explicit call: Play Integrity genuinely cannot be
+worked around on any emulator (already researched and documented, see
+above), and no separate spare Android phone was found - so Reddit
+testing moved to the real, already-logged-in native app on the daily
+driver Pixel 6a rather than continuing to chase an emulator path.
+
+**Feed reading: works well, no issues.** Triggered from the main
+r/all-style feed - 4164 chars, real post titles/subreddits/upvote-comment
+counts across multiple posts, matching RedditProfile's documented
+scroll-and-accumulate design exactly.
+
+**Post detail/comments screen: reconfirms the ALREADY-DOCUMENTED
+Compose-tree limitation** (see RedditProfile's own class doc, written
+2026-09-12 - this wasn't a new finding, just the first time it's been
+re-verified against a real phone rather than the emulator): all three
+tree-based extraction attempts (initial read, tap fallback, direct
+accessibility-focus fallback) returned 0 chars, falling through to the
+OCR-screenshot fallback exactly as designed. Confirms the underlying
+cause is real and still current, not something that quietly stopped
+applying on a real device.
+
+**One genuinely new, fixed issue found via this re-test**: the OCR
+fallback OCRs the RAW, uncropped screenshot, so the status bar's clock
+and icons leaked into the reading as a garbled line ahead of the real
+content ("22:02 E M E : X"). Fixed in
+`ReadAloudAccessibilityService.ocrScreenshot()` - crops off the status
+bar (looked up via the platform's own `status_bar_height` dimen rather
+than a hardcoded guess that would drift across devices) before handing
+the bitmap to MLKit. Verified live: re-ran the identical post, the
+garbled status-bar line is gone, real content starts immediately.
+
+**One genuinely new, NOT fixed, issue found**: that same post's feature
+image was a labeled infographic map (region names baked into the photo
+itself) - OCR read those region names as if they were part of the
+post/comment content, interleaved with the real caption text, with no
+way to currently tell "real caption" from "text inside a photo apart."
+Documented rather than fixed - distinguishing the two would need
+real design work (e.g. only OCR outside detected image bounds, if
+those bounds are even available at this fallback's point in the
+pipeline), not a quick crop. Flagging and stopping here rather than
+open-endedly tuning OCR further.
