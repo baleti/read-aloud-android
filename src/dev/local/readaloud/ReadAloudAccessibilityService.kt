@@ -241,6 +241,30 @@ class ReadAloudAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** Confirmed live 2026-09-20: while touch exploration is active (the
+     * whole point of withTouchExplorationMode(), wrapping this entire
+     * extract() call for RedditProfile), a plain single-finger swipe
+     * dispatched via dispatchGesture() no longer scrolls anything -
+     * `scrollForward()` kept reporting the gesture itself completed
+     * (`ok=true`), but the visible content never moved (same screenshot
+     * OCR'd twice in a row). Touch exploration mode most likely
+     * reinterprets a raw one-finger swipe as an explore gesture rather
+     * than a scroll (real touch exploration typically needs a two-finger
+     * swipe to scroll for exactly this reason). RedditProfile's OCR
+     * fallback doesn't need touch exploration at all - it never reads the
+     * accessibility tree - so it calls this to turn exploration back off
+     * BEFORE starting its own scroll-and-accumulate loop, rather than
+     * waiting for withTouchExplorationMode()'s own `finally` to restore it
+     * only once extract() fully returns (too late for scrolling that
+     * happens DURING extract()). Idempotent from that outer restore's own
+     * perspective - it just resets to the same already-off value again. */
+    fun disableTouchExplorationNow() {
+        val info = serviceInfo
+        info.flags = info.flags and android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE.inv()
+        serviceInfo = info
+        Thread.sleep(300)
+    }
+
     /** The vision-fallback hook (see RedditProfile's class doc): captures
      * the current screen via the platform screenshot API (needs
      * canTakeScreenshot, already declared) and returns it as a Bitmap.

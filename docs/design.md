@@ -901,3 +901,138 @@ real design work (e.g. only OCR outside detected image bounds, if
 those bounds are even available at this fallback's point in the
 pipeline), not a quick crop. Flagging and stopping here rather than
 open-endedly tuning OCR further.
+
+## Reddit comments, round two: a real safety incident, a genuine breakthrough, and an honest remaining gap (2026-09-20)
+
+Asked explicitly to push further on Reddit specifically: "get it to the
+state where I can simply open any reddit thread window and it will read
+it naturally and properly." Real progress on multiple fronts, but the
+honest answer is still "not for every entry point" - documented in
+detail below rather than overclaimed.
+
+**Ruled out, empirically, not just theorized**: extended every settle
+time in the tree-based fallback chain (tap-fallback from 0ms to 600ms
+per tap, accessibility-focus fallback from 400ms to 900ms) - zero
+change, still exactly 0 chars both times. This rules out timing/race as
+the cause of the standalone text-post comments screen's opacity (see
+the original 2026-09-12 finding above) - it's confirmed structural, not
+a race.
+
+**A real safety incident, found and fixed**: the tap-fallback fired
+three blind `dispatchGesture()` taps at fixed screen-height fractions,
+hoping one would land on real content and wake up Compose's semantics.
+Live on the user's own daily-driver phone, one of those taps landed
+squarely on a sponsored post's "Shop Now" button and navigated the
+Reddit app to an external shopping site (sharkninja.co.uk) - complete
+with a real cookie-consent dialog and "Add to cart" visible.
+Screenshotted, closed immediately, no lasting effect (nothing was
+actually accepted or purchased), but this is a genuine safety issue, not
+just a quality one - a slightly different coordinate could have hit
+"Accept all Cookies" or "Add to cart" for real, on a real phone, during
+ordinary use. Given this technique had NEVER, across every test this
+session, surfaced real Reddit content either before or after this
+incident, it was removed outright rather than patched to be "safer" -
+there's no coordinate this profile can pick in advance that's
+guaranteed not to be some other post's real, clickable content. The
+accessibility-focus fallback (side-effect-free - it requests a11y
+focus, never a real click) is the one remaining tree-based attempt
+before OCR.
+
+**OCR fallback improvements, both verified**:
+1. `ocrScrollAndAccumulate()` - scrolls and accumulates across multiple
+   screenshots (same LinkedHashSet-dedup shape as every other scroll-
+   accumulate loop in this project) instead of a single static
+   screenshot, so a comments screen with more content than fits on one
+   screen isn't silently cut off. `service.scrollForward(root)` works
+   even though the Compose content itself exposes no real scrollable
+   node - passing the whole-screen `root` falls through to a bounds-
+   based swipe gesture regardless of tree structure.
+2. `isLikelyAdNoise()` - drops the clearest, most reliably-tagged ad
+   signals (a line ending in the platform's own "Ad" badge text, a bare
+   sponsor domain, a standard CTA button like "Shop Now"). Verified
+   live: re-ran the identical post before/after, the "sharkninjauk Ad" /
+   "sharkninja.co.uk" / "Shop Now" lines are gone, real content
+   unchanged. An ad's own body copy is NOT filtered (indistinguishable
+   from real content without per-block bounding boxes MlKitOcr doesn't
+   currently expose) - known-imperfect, documented, not chased further.
+
+**A scrolling mystery that turned into a much bigger finding**: the new
+scroll-accumulate loop's `scrollForward()` kept reporting success
+(`ok=true`) but the visible content never actually moved, confirmed via
+before/after screenshots. First hypothesis (touch exploration
+intercepting the one-finger swipe as an explore gesture instead of a
+scroll) was tested directly - added `disableTouchExplorationNow()` to
+turn exploration off before the OCR/scroll phase starts, since OCR
+never reads the tree and gets no benefit from it being on - no change
+at all. Second test: a completely raw `adb shell input swipe`,
+bypassing this app entirely, ALSO failed to scroll the same screen at
+the same moment - ruling out anything in this app's own gesture
+dispatch. This particular screen (the standalone comments Activity
+opened by tapping a text post's title/comment-count directly) most
+likely doesn't support continuous scrolling at all in its current state
+- a uiautomator dump of that exact screen revealed a "Next comment"
+content-desc button, suggesting Reddit's own accessibility affordance
+here is a discrete step-through-one-at-a-time action, not a
+continuously scrollable feed. Not pursued further this session (tapping
+it blindly would reintroduce the same class of risk just fixed above,
+and it can't currently be located via this profile's own tree query -
+see below); a real, separately-tested feed/list screen (the main Reddit
+feed, and the bottom-sheet comments below) both scroll completely
+normally via the exact same `scrollForward()` mechanism, so this is
+scoped narrowly to this one screen shape, not a general regression.
+
+**The actual breakthrough**: while investigating why `uiautomator dump`
+consistently showed a full, rich, real accessibility tree for the
+standalone text-post comments screen (proper content-desc labels like
+"Level 1 comment by SilyLavage, [Lancashire], 5 minutes ago" - genuine,
+deliberate accessibility semantics, not garbage) while this app's OWN
+`AccessibilityService.getRootInActiveWindow()` consistently saw a
+collapsed `childCount=1` root at the exact same moment - ruled out
+staleness directly (`AccessibilityNodeInfo.refresh()` returns true, but
+`childCount` stays 1, meaning this is live-queried, not cached) - a
+COMPLETELY DIFFERENT Reddit screen was tested along the way: opening a
+comments THREAD via "See the conversation" from an image/video post's
+full-bleed viewer (a bottom-sheet/modal overlay, not the standalone
+comments Activity) produced real, immediate, non-empty tree content on
+the very FIRST attempt - no fallback, no OCR needed at all: `initial
+read: 812 chars`, growing to `2253 chars` once the existing (untouched
+since 2026-09-12, never previously proven to work end-to-end on this
+app) expand-and-scroll loop ran. Confirmed genuine: real ad copy, real
+"BEST COMMENTS" section header, real nested reply content, all
+correctly ordered.
+
+This means Reddit's app has (at least) two structurally different
+comment-view implementations - a bottom-sheet/modal one that exposes
+real, complete accessibility semantics the ordinary way, and the
+standalone full-screen one (reached by tapping a text post's title or
+comment count directly) that doesn't, for reasons still not fully
+understood (the tree-access divergence between `uiautomator` and this
+app's own live `AccessibilityService` query, at the exact same instant,
+on the exact same screen, remains a genuinely open, unresolved
+technical question - worth revisiting with fresh eyes, not a dead end,
+but past the point where guessing more timing/mode toggles was
+producing anything).
+
+**One new, NOT yet fixed issue surfaced by the breakthrough itself**:
+after the bottom-sheet comments read finished, the screen had moved on
+to a completely different, unrelated post ("What is the conventional
+and realistic career path for an architect...") - the existing expand-
+and-scroll loop most likely doesn't recognize "reached the true end of
+THIS post's comments" in this full-bleed/bottom-sheet context, and
+instead scrolled straight into whatever comes next in the swipeable
+feed. Not fixed this session (time-boxed) - flagged for next time,
+same shape of problem as Gmail's ViewPager cross-contamination bug
+from earlier in this project, likely fixable the same way (bounds-
+aware "is this node still part of the original sheet" check) once
+someone sits down with it.
+
+**Honest summary for "any reddit thread window"**: the main feed reads
+well (established previously). Bottom-sheet comments (reached via "See
+the conversation" from an image/video post) now read very well via the
+real tree - a genuine, verified win. Standalone text-post comments
+screens (tapping a post's title/comment count directly) still fall back
+to OCR - safer and less noisy than before, but not "natural" in the
+same way, doesn't reliably scroll past the first screen, and the
+underlying cause remains only partially understood. Not fully "any
+thread, reads properly" yet - closer, with a much better-scoped
+remaining gap than at the start of this session.
