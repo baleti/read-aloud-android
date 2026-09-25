@@ -1036,3 +1036,73 @@ same way, doesn't reliably scroll past the first screen, and the
 underlying cause remains only partially understood. Not fully "any
 thread, reads properly" yet - closer, with a much better-scoped
 remaining gap than at the start of this session.
+
+## Reddit, round three: usernames filtered, a real overscroll bug caught live (2026-09-25)
+
+Asked two direct things: does reading require the app to actually,
+visibly scroll (or is there another trick), and stop reading every
+user's name.
+
+**Scrolling - answered honestly, not fixed further**: no trick exists
+to avoid it. The tree-based path needs content laid out on screen for
+the accessibility API to see it at all; the OCR path needs it rendered
+to photograph it. Both genuinely require the on-screen content to move
+during a brief pre-speech "gathering" phase - this is architectural,
+not a missed optimization.
+
+**Usernames - filtered, with one gap left honest**: added `filterUsernames()`,
+applied uniformly to every line collected by both the tree path and
+OCR's own scroll-accumulate, catching three shapes confirmed live: a
+bare "u/Name" line, a standalone "Name 5m"/"Name OP 3h" line, and a
+post's own content-desc suffixed ", post creator". A fourth shape - a
+genuinely bare name with no prefix, suffix, or timestamp at all
+(confirmed live: one post's author rendered as just "youyou0032" on its
+own line, nothing else) - is NOT caught and is documented as a known,
+accepted gap rather than chased with more coincidental pattern-matching.
+Also fixed a real spacing bug in the embedded-name stripping for the
+tree's own "Level N comment by Name, ..." announcements: the original
+regex consumed the trailing comma along with the name, producing "Level
+1 comment2 months ago" (glued together, no separator) - fixed to leave
+the comma in place, confirmed live: "Level 1 comment, 3 hours ago, 1
+vote", clean.
+
+**A real overscroll bug, caught live while testing the above**: with a
+comments sheet not yet fully expanded (minimal initial tree content),
+the OCR scroll-accumulate loop's own scroll budget (8) was enough to
+scroll straight through the end of the original post and into SEVERAL
+unrelated subsequent posts in the swipeable feed - one of which was a
+screenshot of a completely unrelated school course-selection tool,
+which got read aloud as if it were part of the original thread's
+comments. Confirmed via `mCurrentFocus` that this was never an app
+switch - Reddit's own fullbleed feed just kept advancing past post
+boundaries with nothing to stop it. This is the exact same root cause
+already flagged (not yet fixed) for the tree-based expand-and-scroll
+loop two sessions ago - now concretely reproduced and fixed for real.
+
+Fix, applied to BOTH loops: the toolbar's subreddit name is pinned at a
+fixed position and stays present in every capture while still on the
+same post - captured once as an anchor before scrolling starts (`r/Name`
+for OCR's raw screenshot text, `r slash Name` for the tree's own
+content-desc rendering of the same toolbar element - confirmed live
+these are genuinely different literal strings for the same UI element
+depending on which extraction path reads it), then checked after every
+subsequent scroll. The instant it's gone, the divergent capture is
+discarded entirely (not merged in) and the loop stops with whatever was
+already collected, rather than silently drifting into someone else's
+post. Verified live: re-ran a fresh post's comments after the fix,
+correctly stopped at 1331 chars of genuinely-that-post's content with
+no cross-contamination, even though Reddit's own autoplay moved the
+screen to a different post moments later (confirmed harmless - that
+happens strictly after extraction finishes, so it can't affect what
+was already captured and handed to TTS).
+
+Also worth noting for future sessions: while testing on the user's own
+live daily-driver phone, two blind taps (based on stale screenshots
+rather than a fresh focus check) landed on unrelated apps - once on
+what looked like a real personal note mid-edit, once on the user's own
+Claude Agents app (likely a notification). Neither caused any actual
+change (a tap alone doesn't insert text), but both were caught only by
+checking `dumpsys window | grep mCurrentFocus` immediately after acting
+rather than trusting an older screenshot - worth doing as standard
+practice before every tap on a real, actively-used device, not just
+after something looks wrong.

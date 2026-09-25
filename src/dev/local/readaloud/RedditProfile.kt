@@ -80,6 +80,47 @@ object RedditProfile : AppProfile {
         return false
     }
 
+    // Asked explicitly 2026-09-25 not to read every user's name - Reddit
+    // surfaces a username in at least FOUR different shapes, confirmed
+    // live, none of which look alike as plain text: a bare "u/Name" line
+    // (posts/some comment headers); a plain "Name 5m"/"Name OP 3h" line
+    // (a standalone username+relative-time rendering as its own text
+    // line, both via the accessibility tree and via OCR); a post's own
+    // content-desc suffixed ", post creator" (e.g. "No_Condition_3102,
+    // post creator" - confirmed live, a DIFFERENT pattern than the
+    // comment one, not every post uses it); and a name embedded inside
+    // the tree's own "Level N comment by Name, [flair], 5 minutes ago, 1
+    // vote" content-desc string, where dropping the whole line would be
+    // wrong (loses useful nesting/flair/vote context that has nothing to
+    // do with the name itself) - only the "by Name" clause is stripped.
+    //
+    // Known, NOT caught: a genuinely bare username with no prefix,
+    // suffix, or trailing timestamp at all (confirmed live - one post's
+    // author rendered as just "LandspaceArch" on its own line, nothing
+    // else). Indistinguishable from any other short line by text pattern
+    // alone without a resource-id/content-desc marker to key off, which
+    // this specific case didn't have. Documented rather than chased with
+    // an ever-growing pile of coincidental heuristics.
+    private val USERNAME_LINE = Regex("""^u/[\w-]+.*""")
+    private val USERNAME_TIME_LINE = Regex("""^[\p{L}0-9][\w.-]{1,30}\s+(?:OP\s+)?(?:\d+[smhdw]|Now)$""")
+    private val POST_CREATOR_LINE = Regex(""".*,\s*post creator$""", RegexOption.IGNORE_CASE)
+    private val COMMENT_BY_USER = Regex("""(Level \d+ comment) by [\w-]+""")
+
+    private fun isLikelyUsernameLine(line: String): Boolean {
+        val trimmed = line.trim()
+        return USERNAME_LINE.matches(trimmed) || USERNAME_TIME_LINE.matches(trimmed) || POST_CREATOR_LINE.matches(trimmed)
+    }
+
+    private fun stripEmbeddedUsername(line: String): String = COMMENT_BY_USER.replace(line) { it.groupValues[1] }
+
+    /** Applied to every batch of lines before they join `seen`, both in
+     * the tree-based path and OCR's own scroll-accumulate loop, so a
+     * fix here can't silently apply to only one of the two the way an
+     * earlier near-duplicate-function mistake did elsewhere in this
+     * project (see AccessibilityTree's own class doc). */
+    private fun filterUsernames(lines: List<String>): List<String> =
+        lines.map { stripEmbeddedUsername(it) }.filter { it.isNotBlank() && !isLikelyUsernameLine(it) }
+
     /** OCR-fallback equivalent of extractThreadScrolling()/RedditProfile's
      * own feed-scrolling loop: captures the current screen, scrolls
      * forward, captures again, dedupes via LinkedHashSet (same tradeoff
@@ -90,15 +131,38 @@ object RedditProfile : AppProfile {
      * childCount=0 leaf) - passing the whole-screen `root` falls through
      * to a bounds-based swipe gesture regardless of node structure, since
      * this only needs to move the SCREEN, not query anything about it. */
+    // Confirmed live 2026-09-25: with only a couple of comments' worth of
+    // real content on screen, this loop's own MAX_OCR_SCROLLS budget (8)
+    // was enough to scroll straight through the end of the ORIGINAL
+    // post's comments and into several completely unrelated subsequent
+    // posts in the swipeable feed - one of which was a screenshot of an
+    // unrelated school course-selection tool, read aloud as if it were
+    // part of the original thread. Same root cause already flagged (not
+    // yet fixed) for the tree-based expand-and-scroll loop's own doc -
+    // this fullbleed/bottom-sheet view has no built-in "end of this
+    // post's comments" signal this profile can detect structurally.
+    // Fixed here for the OCR path specifically: the toolbar's subreddit
+    // name (e.g. "r/architecturestudent") is pinned at a fixed position
+    // and confirmed present in every OCR capture while still within the
+    // same post - captured once before scrolling starts, then checked
+    // after every subsequent scroll; the moment it's gone, a different
+    // post has been entered and the divergent capture is discarded
+    // entirely rather than merged in, stopping the loop with whatever
+    // was already collected.
+    private val SUBREDDIT_LINE = Regex("""^r/[\w]+$""")
+    private val SUBREDDIT_LINE_TREE = Regex("""^r slash [\w-]+$""", RegexOption.IGNORE_CASE)
+
     private fun ocrScrollAndAccumulate(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String> {
         val seen = LinkedHashSet<String>()
-        fun captureCurrent() {
-            service.ocrScreenshot().split("\n")
+        fun captureLines(): List<String> {
+            val lines = service.ocrScreenshot().split("\n")
                 .map { it.trim() }
                 .filter { it.isNotBlank() && !isLikelyAdNoise(it) }
-                .forEach { seen.add(it) }
+            return filterUsernames(lines)
         }
-        captureCurrent()
+        val initialLines = captureLines()
+        val anchorSubreddit = initialLines.firstOrNull { SUBREDDIT_LINE.matches(it) }
+        seen.addAll(initialLines)
         var current = root
         var scrolls = 0
         var stagnantPasses = 0
@@ -110,7 +174,12 @@ object RedditProfile : AppProfile {
             scrolls++
             Thread.sleep(500)
             current = service.foregroundRoot()?.second ?: break
-            captureCurrent()
+            val newLines = captureLines()
+            if (anchorSubreddit != null && newLines.none { it == anchorSubreddit }) {
+                Log.i(TAG, "ocrScrollAndAccumulate: left original post (subreddit anchor '$anchorSubreddit' no longer present) - stopping")
+                break
+            }
+            seen.addAll(newLines)
             stagnantPasses = if (seen.size == beforeSize) stagnantPasses + 1 else 0
         }
         return seen.toList()
@@ -171,7 +240,23 @@ object RedditProfile : AppProfile {
             return ocrLines
         }
 
-        seen.addAll(current)
+        seen.addAll(filterUsernames(current))
+
+        // Confirmed live 2026-09-25 (chasing the OCR path's own version of
+        // this bug - see ocrScrollAndAccumulate's doc): this loop has no
+        // built-in "reached the end of THIS post's comments" signal
+        // either, and scrolling far enough runs straight past it into
+        // subsequent unrelated posts in the swipeable feed. Same fix,
+        // same anchor idea: the toolbar's subreddit name renders as a
+        // content-desc like "r slash architecturestudent" via the
+        // accessibility tree (confirmed live - a different literal
+        // string than OCR's own "r/architecturestudent", hence the
+        // separate regex) and stays present while still on the same
+        // post; captured once up front, checked after every scroll
+        // (not after an expand-click, which never navigates away on its
+        // own), and the loop stops the instant it's gone rather than
+        // merging in whatever post came next.
+        val anchorSubreddit = current.firstOrNull { SUBREDDIT_LINE_TREE.matches(it) }
 
         // Expand any "more replies"/"view more comments" button currently
         // visible, then scroll, repeating until a pass adds nothing new or
@@ -192,7 +277,7 @@ object RedditProfile : AppProfile {
                 if (moreNode != null && service.click(moreNode)) {
                     expandClicks++
                     Thread.sleep(700) // a real network fetch behind this, not a local UI change - see class doc, finding 3
-                    service.foregroundRoot()?.second?.let { seen.addAll(AccessibilityTree.collectText(it)) }
+                    service.foregroundRoot()?.second?.let { seen.addAll(filterUsernames(AccessibilityTree.collectText(it))) }
                 }
             }
 
@@ -202,7 +287,14 @@ object RedditProfile : AppProfile {
             scrolls++
             if (!scrolled) break
             Thread.sleep(350) // let the lazy list actually compose new rows before re-querying
-            service.foregroundRoot()?.second?.let { seen.addAll(AccessibilityTree.collectText(it)) }
+            val afterScroll = service.foregroundRoot()?.second?.let { AccessibilityTree.collectText(it) }
+            if (afterScroll != null) {
+                if (anchorSubreddit != null && afterScroll.none { it == anchorSubreddit }) {
+                    Log.i(TAG, "extract: left original post (subreddit anchor '$anchorSubreddit' gone) after scroll - stopping")
+                    break
+                }
+                seen.addAll(filterUsernames(afterScroll))
+            }
 
             stagnantPasses = if (seen.size == beforeSize) stagnantPasses + 1 else 0
         }
