@@ -36,17 +36,20 @@ object OverlayIndicator {
     // MIN_VISIBLE_MS.
     private const val SHOW_DELAY_MS = 1200L
     private const val MIN_VISIBLE_MS = 1500L
-    private const val MAX_LINES = 5
-    private const val LINE_MAX_AGE_MS = 25_000L
+    private const val MAX_LINES = 4
 
-    private class Step(val text: String, val sentence: Int, val of: Int, val atNanos: Long)
+    private class Step(val text: String, val atNanos: Long)
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var view: TextView? = null
     private var baseText = ""
     private var waiting = false
     private var visibleSinceNanos = 0L
+    // Steps of the ONE sentence playback is blocked on (server forwards only
+    // that one): all but the last are finished, the last is in progress.
     private val steps = ArrayList<Step>()
+    private var sentence = 0
+    private var sentenceCount = 0
 
     private val showRunnable = Runnable { if (waiting) createView() }
     private val hideRunnable = Runnable { removeView() }
@@ -61,11 +64,12 @@ object OverlayIndicator {
     /** The server's step-by-step `status` events (see server.py's
      * _progress). Kept even while the overlay is hidden, so it already has
      * the recent history when it appears. */
-    fun addStatus(message: String, sentence: Int = 0, of: Int = 0) {
+    fun addStatus(message: String, sentenceNo: Int = 0, of: Int = 0) {
         mainHandler.post {
-            if (steps.lastOrNull()?.text == message && steps.last().sentence == sentence) return@post
-            steps.add(Step(message, sentence, of, System.nanoTime()))
-            while (steps.size > 20) steps.removeAt(0)
+            if (sentenceNo != sentence || sentenceNo == 0) steps.clear()
+            sentence = sentenceNo
+            sentenceCount = of
+            if (steps.lastOrNull()?.text != message) steps.add(Step(message, System.nanoTime()))
             if (view != null) render()
         }
     }
@@ -74,13 +78,12 @@ object OverlayIndicator {
         val tv = view ?: return
         val now = System.nanoTime()
         val sb = StringBuilder(baseText)
-        val recent = steps.filter { (now - it.atNanos) / 1_000_000 <= LINE_MAX_AGE_MS }.takeLast(MAX_LINES)
-        for ((i, step) in recent.withIndex()) {
-            val last = i == recent.lastIndex
-            sb.append('\n').append(if (last) "▸ " else "· ")
-            if (step.sentence > 0) sb.append('[').append(step.sentence).append('/').append(step.of).append("] ")
-            sb.append(step.text)
-            if (last) {
+        if (sentence > 0) sb.append(" (sentence ").append(sentence).append(" of ").append(sentenceCount).append(')')
+        val shown = steps.takeLast(MAX_LINES)
+        for ((i, step) in shown.withIndex()) {
+            val current = i == shown.lastIndex
+            sb.append('\n').append(if (current) "▸ " else "✓ ").append(step.text)
+            if (current) {
                 val sec = (now - step.atNanos) / 1_000_000_000
                 if (sec >= 2) sb.append(" (").append(sec).append("s)")
             }
