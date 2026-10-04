@@ -42,6 +42,44 @@ object TtsSpeaker {
 
     @Volatile private var activeWs: WebSocketClient? = null
 
+    // The phone's own TTS, used to bridge the gap before the server's first
+    // sentence (cold Chatterbox can take 15-30s) - see speak(). Engine init
+    // takes ~1-3s the first time, so call warmUp() early (the accessibility
+    // service does at connect time); a speak() before it's ready just runs
+    // without the bridge.
+    @Volatile private var localTts: LocalTts? = null
+
+    fun warmUp(context: Context) {
+        if (localTts == null) localTts = try { LocalTts(context) } catch (e: Exception) { null }
+    }
+
+    /** Sentence char ranges within `text`, split like server.py's
+     * split_sentences so local and server agree where sentences begin. */
+    private fun splitLocalSentences(text: String): List<IntRange> {
+        val out = mutableListOf<IntRange>()
+        var start = -1
+        for (i in text.indices) {
+            if (start < 0 && !text[i].isWhitespace()) start = i
+            val boundary = start >= 0 && text[i].isWhitespace() && i > 0 &&
+                (text[i - 1] in ".!?" || (text[i] == '\n' && i + 1 < text.length && text[i + 1] == '\n'))
+            if (boundary) { out.add(start..(i - 1)); start = -1 }
+        }
+        if (start >= 0) out.add(start..text.trimEnd().length - 1)
+        return out.filter { it.last >= it.first }
+    }
+
+    /** Same char-proportional word timings server.py's estimate_word_timings makes. */
+    private fun estimateWordTimings(sentence: String, durationMs: Double): List<WordTiming> {
+        val words = sentence.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (words.isEmpty()) return emptyList()
+        val totalChars = words.sumOf { maxOf(it.length, 1) }
+        var cursor = 0.0
+        return words.map { w ->
+            val dur = durationMs * maxOf(w.length, 1) / totalChars
+            WordTiming(w, cursor.toInt(), (cursor + dur).toInt()).also { cursor += dur }
+        }
+    }
+
     private fun closeActiveWs() {
         activeWs?.let {
             try { it.close() } catch (_: Exception) {}
@@ -183,13 +221,50 @@ object TtsSpeaker {
             mainHandler.postDelayed(::reportPosition, 500)
         }
 
+        // Local bridge: speak the first sentence on-device at once and ask
+        // the server to start AFTER it; keep speaking locally only while the
+        // server is behind (local audio nearly spent), stop for good the
+        // moment a server sentence lands past what local covered, drop
+        // server sentences for text local already spoke. feedLock keeps the
+        // two producers in order. Mirrors newsdigest-android's
+        // ReadAloudController.streamText().
+        val feedLock = Any()
+        var serverTookOver = false
+        var localEnd = 0
+        val local = localTts?.takeIf { it.isReady() }
+        val localSentences = if (local != null) splitLocalSentences(text) else emptyList()
+        val wsOffset = localSentences.firstOrNull()?.last?.plus(1) ?: 0
+        var serverCursor = wsOffset
+
+        if (local != null && localSentences.isNotEmpty()) {
+            Thread {
+                for ((i, range) in localSentences.withIndex()) {
+                    if (!active.get() || serverTookOver) return@Thread
+                    while (i > 0 && active.get() && !serverTookOver && svc.bufferedAheadMs() > 700) Thread.sleep(100)
+                    if (!active.get() || serverTookOver) return@Thread
+                    val sentence = text.substring(range)
+                    val audio = local.synthesize(sentence) ?: return@Thread
+                    synchronized(feedLock) {
+                        if (!active.get() || serverTookOver) return@Thread
+                        val ms = audio.pcm.size / 2 * 1000.0 / audio.sampleRate
+                        svc.enqueueSentence(sentence, estimateWordTimings(sentence, ms), audio.pcm, audio.sampleRate)
+                        localEnd = range.last + 1
+                    }
+                }
+                // Local covered everything (server dead or hopelessly slow):
+                // end the session ourselves and release the blocking connect().
+                val finish = synchronized(feedLock) { active.get() && !serverTookOver }
+                if (finish) { active.set(false); svc.endSession(); ws.close() }
+            }.apply { isDaemon = true; name = "TtsSpeakerLocal"; start() }
+        }
+
         ws.connect(object : WebSocketClient.Listener {
             private var pendingMeta: JSONObject? = null
 
             override fun onOpen() {
                 ws.sendText(
                     JSONObject().apply {
-                        put("text", text)
+                        put("text", text.substring(wsOffset).trimStart())
                         put("engine", Settings.getTtsEngine(context))
                         Settings.getTtsVoice(context)?.let { put("voice", it) }
                     }.toString(),
@@ -201,9 +276,15 @@ object TtsSpeaker {
                 val obj = JSONObject(msg)
                 when (obj.optString("type")) {
                     "sentence" -> pendingMeta = obj
-                    "done" -> { active.set(false); svc.endSession(); ws.close() }
+                    "status" -> OverlayIndicator.addStatus(obj.optString("message"), obj.optInt("sentence"), obj.optInt("of"))
+                    "done" -> {
+                        // Everything was either enqueued by the server or
+                        // already covered by local audio.
+                        active.set(false); svc.endSession(); ws.close()
+                    }
                     "error" -> {
                         Log.e(TAG, "server error: ${obj.optString("message")}")
+                        if (localSentences.isNotEmpty() && !serverTookOver) return // local TTS keeps reading
                         active.set(false)
                         svc.endSession()
                         ws.close()
@@ -220,12 +301,20 @@ object TtsSpeaker {
                         words.add(WordTiming(w.getString("word"), w.getInt("start_ms"), w.getInt("end_ms")))
                     }
                 }
-                svc.enqueueSentence(meta.getString("text"), words, data, meta.getInt("sample_rate"))
+                val sText = meta.getString("text")
+                synchronized(feedLock) {
+                    val at = text.indexOf(sText, serverCursor)
+                    if (at >= 0) serverCursor = at + sText.length
+                    if (at >= 0 && at + sText.length <= localEnd) return // local already spoke it
+                    serverTookOver = true
+                    svc.enqueueSentence(sText, words, data, meta.getInt("sample_rate"))
+                }
             }
 
             override fun onFailure(error: Throwable) {
-                active.set(false)
                 Log.e(TAG, "websocket failed", error)
+                if (localSentences.isNotEmpty() && !serverTookOver) return // local TTS keeps reading
+                active.set(false)
                 OverlayIndicator.hide()
             }
             override fun onClosed() { active.set(false) }

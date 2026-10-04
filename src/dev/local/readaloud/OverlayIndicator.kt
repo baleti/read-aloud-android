@@ -30,55 +30,127 @@ import android.widget.TextView
  */
 object OverlayIndicator {
     private const val TAG = "OverlayIndicator"
+    // Anti-flicker, asked for explicitly 2026-10-04: only appear once the
+    // wait has lasted SHOW_DELAY_MS (the split-second gaps between
+    // sentences mid-read never show it), and once shown stay at least
+    // MIN_VISIBLE_MS.
+    private const val SHOW_DELAY_MS = 1200L
+    private const val MIN_VISIBLE_MS = 1500L
+    private const val MAX_LINES = 5
+    private const val LINE_MAX_AGE_MS = 25_000L
+
+    private class Step(val text: String, val sentence: Int, val of: Int, val atNanos: Long)
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var view: TextView? = null
+    private var baseText = ""
+    private var waiting = false
+    private var visibleSinceNanos = 0L
+    private val steps = ArrayList<Step>()
+
+    private val showRunnable = Runnable { if (waiting) createView() }
+    private val hideRunnable = Runnable { removeView() }
+    private val tick = object : Runnable {
+        override fun run() {
+            if (view == null) return
+            render()
+            mainHandler.postDelayed(this, 500)
+        }
+    }
+
+    /** The server's step-by-step `status` events (see server.py's
+     * _progress). Kept even while the overlay is hidden, so it already has
+     * the recent history when it appears. */
+    fun addStatus(message: String, sentence: Int = 0, of: Int = 0) {
+        mainHandler.post {
+            if (steps.lastOrNull()?.text == message && steps.last().sentence == sentence) return@post
+            steps.add(Step(message, sentence, of, System.nanoTime()))
+            while (steps.size > 20) steps.removeAt(0)
+            if (view != null) render()
+        }
+    }
+
+    private fun render() {
+        val tv = view ?: return
+        val now = System.nanoTime()
+        val sb = StringBuilder(baseText)
+        val recent = steps.filter { (now - it.atNanos) / 1_000_000 <= LINE_MAX_AGE_MS }.takeLast(MAX_LINES)
+        for ((i, step) in recent.withIndex()) {
+            val last = i == recent.lastIndex
+            sb.append('\n').append(if (last) "▸ " else "· ")
+            if (step.sentence > 0) sb.append('[').append(step.sentence).append('/').append(step.of).append("] ")
+            sb.append(step.text)
+            if (last) {
+                val sec = (now - step.atNanos) / 1_000_000_000
+                if (sec >= 2) sb.append(" (").append(sec).append("s)")
+            }
+        }
+        tv.text = sb.toString()
+    }
 
     fun show(text: String) {
         mainHandler.post {
-            val service = ReadAloudAccessibilityService.instance ?: return@post
-            val existing = view
-            if (existing != null) {
-                existing.text = text
-                return@post
-            }
-            val tv = TextView(service).apply {
-                this.text = text
-                setTextColor(0xFFFFFFFF.toInt())
-                setBackgroundColor(0xCC202020.toInt())
-                textSize = 13f
-                setPadding(28, 16, 28, 16)
-            }
-            val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-                PixelFormat.TRANSLUCENT,
-            )
-            params.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            params.y = 100
-            try {
-                val wm = service.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-                wm.addView(tv, params)
-                view = tv
-            } catch (e: Throwable) {
-                Log.e(TAG, "couldn't add overlay", e)
-            }
+            baseText = text
+            mainHandler.removeCallbacks(hideRunnable)
+            if (view != null) { waiting = true; render(); return@post }
+            if (!waiting) mainHandler.postDelayed(showRunnable, SHOW_DELAY_MS)
+            waiting = true
+        }
+    }
+
+    private fun createView() {
+        val service = ReadAloudAccessibilityService.instance ?: return
+        if (view != null) return
+        val tv = TextView(service).apply {
+            setTextColor(0xFFFFFFFF.toInt())
+            setBackgroundColor(0xCC202020.toInt())
+            textSize = 13f
+            setPadding(28, 16, 28, 16)
+        }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT,
+        )
+        params.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        params.y = 100
+        try {
+            val wm = service.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            wm.addView(tv, params)
+            view = tv
+            visibleSinceNanos = System.nanoTime()
+            render()
+            mainHandler.postDelayed(tick, 500)
+        } catch (e: Throwable) {
+            Log.e(TAG, "couldn't add overlay", e)
         }
     }
 
     fun hide() {
         mainHandler.post {
-            val service = ReadAloudAccessibilityService.instance
-            val existing = view ?: return@post
-            view = null
-            if (service == null) return@post
-            try {
-                val wm = service.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-                wm.removeView(existing)
-            } catch (e: Exception) {
-                Log.w(TAG, "couldn't remove overlay: ${e.message}")
-            }
+            waiting = false
+            mainHandler.removeCallbacks(showRunnable)
+            if (view == null) return@post
+            val visibleMs = (System.nanoTime() - visibleSinceNanos) / 1_000_000
+            mainHandler.removeCallbacks(hideRunnable)
+            if (visibleMs >= MIN_VISIBLE_MS) removeView()
+            else mainHandler.postDelayed(hideRunnable, MIN_VISIBLE_MS - visibleMs)
+        }
+    }
+
+    private fun removeView() {
+        mainHandler.removeCallbacks(tick)
+        val service = ReadAloudAccessibilityService.instance
+        val existing = view ?: return
+        view = null
+        if (service == null) return
+        try {
+            val wm = service.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            wm.removeView(existing)
+        } catch (e: Exception) {
+            Log.w(TAG, "couldn't remove overlay: ${e.message}")
         }
     }
 }

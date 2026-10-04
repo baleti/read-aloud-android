@@ -59,6 +59,7 @@ class ReadAloudAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        TtsSpeaker.warmUp(applicationContext)
         instance = this
     }
 
