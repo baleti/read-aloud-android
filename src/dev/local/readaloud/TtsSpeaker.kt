@@ -243,7 +243,7 @@ object TtsSpeaker {
                     while (i > 0 && active.get() && !serverTookOver && svc.bufferedAheadMs() > 700) Thread.sleep(100)
                     if (!active.get() || serverTookOver) return@Thread
                     val sentence = text.substring(range)
-                    val audio = local.synthesize(sentence) ?: return@Thread
+                    val audio = local.synthesize(speakableForLocalTts(sentence)) ?: return@Thread
                     synchronized(feedLock) {
                         if (!active.get() || serverTookOver) return@Thread
                         val ms = audio.pcm.size / 2 * 1000.0 / audio.sampleRate
