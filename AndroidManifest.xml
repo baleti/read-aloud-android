@@ -99,6 +99,14 @@
             </intent-filter>
         </receiver>
 
+        <!-- Music-player screen opened whenever a read starts (see its doc).
+             singleTask so every new read reuses the one player instead of stacking. -->
+        <activity
+            android:name=".PlayerActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:label="Read Aloud" />
+
         <service
             android:name=".TtsPlaybackService"
             android:foregroundServiceType="mediaPlayback"

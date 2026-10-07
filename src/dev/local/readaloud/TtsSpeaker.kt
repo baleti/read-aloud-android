@@ -190,6 +190,7 @@ object TtsSpeaker {
         })
 
         svc.startSession(title)
+        PlayerActivity.launch(context.applicationContext)
         val wordCount = text.split(Regex("\\s+")).count { it.isNotBlank() }
         svc.setEstimatedDuration((wordCount / (160.0 / 60.0) * 1000).toLong())
 

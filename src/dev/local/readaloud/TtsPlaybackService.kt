@@ -409,6 +409,11 @@ class TtsPlaybackService : Service() {
      * in its own UI at all. */
     fun hasActiveSession(): Boolean = hasActiveSession
 
+    /** Sentence currently (or most recently) being spoken, for a player UI. */
+    fun currentSentenceText(): String = lastSentenceText
+    fun currentTitle(): String = currentTitle
+    fun currentSpeed(): Float = playbackSpeed
+
     /** Real current playing/paused state, independent of which controller
      * (if any) is currently bound -- same use as hasActiveSession(). */
     fun isPlaying(): Boolean = playing

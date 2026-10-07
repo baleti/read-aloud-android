@@ -15,6 +15,10 @@ object Theme {
     const val surface = 0xFF2A221E.toInt()
     const val onBackground = 0xFFECE0DA.toInt()
     const val outline = 0xFF9F8D84.toInt()
+    const val surfaceContainer = 0xFF3A2E28.toInt()
+    const val outlineVariant = 0xFF52443C.toInt()
+    const val muted = 0xFFB8A89F.toInt()
+    const val bg = 0xFF1C1512.toInt()
     const val primary = 0xFFFFB68A.toInt()
 
     fun dp(context: Context, v: Int): Int = (v * context.resources.displayMetrics.density).toInt()
