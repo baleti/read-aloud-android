@@ -177,7 +177,7 @@ object GmailProfile : AppProfile {
             return true
         }
         when (mode) {
-            "inbox_top" -> runInboxSequence(service, startIndex = 0, direction = 1, label)
+            "inbox_top" -> { startAnchorText = null; runInboxSequence(service, startIndex = 0, direction = 1, label) }
             // Gmail can group several messages into one conversation entry
             // ("Michael, 6 messages...") - asked for explicitly 2026-09-13
             // after spotting this exact thread does it. Only pops the
@@ -293,10 +293,21 @@ object GmailProfile : AppProfile {
                 sender != null && (row.text?.toString() ?: "").lowercase().contains(sender.take(15).lowercase())
             } ?: subjectMatches.first()
         }
+        startAnchorText = chosen.value.text?.toString()
         return chosen.index
     }
 
     private const val MAX_INBOX_SCROLLS = 15
+
+    /** A list row's text for anchoring: Gmail prefixes unread rows with "Unread, " and drops it the moment
+     * the email has been opened, so the row we just read never matched its own earlier text - the walk
+     * then scrolled the whole inbox looking for it and announced "last email" (reported 2026-10-07). */
+    private fun anchorKey(text: String?): String =
+        (text ?: "").replace(Regex("^\\s*(unread|read)\\s*,\\s*", RegexOption.IGNORE_CASE), "").replace(Regex("\\s+"), " ").trim().lowercase()
+
+    // The row of the email that was open when "onwards/backwards" was chosen (set by findCurrentRowIndex), so the first
+    // step can find its neighbour by anchoring even when that neighbour isn't rendered yet.
+    private var startAnchorText: String? = null
 
     /** Finds the row to open next. The very first step (`lastRowText ==
      * null`) uses `pendingIndex` (a plain position within whatever's
@@ -328,11 +339,17 @@ object GmailProfile : AppProfile {
         pendingIndex: Int?,
         direction: Int,
     ): AccessibilityNodeInfo? {
-        if (lastRowText == null) return listRows(root).getOrNull(pendingIndex ?: 0)
+        var anchorText = lastRowText
+        if (anchorText == null) {
+            listRows(root).getOrNull(pendingIndex ?: 0)?.let { return it }
+            // that row isn't rendered yet (the open email was the last one on screen): anchor on the email's own row
+            anchorText = startAnchorText ?: return null
+        }
+        val wanted = anchorKey(anchorText)
         var current = root
         repeat(MAX_INBOX_SCROLLS) {
             val rows = listRows(current)
-            val anchorIdx = rows.indexOfFirst { (it.text?.toString() ?: "") == lastRowText }
+            val anchorIdx = rows.indexOfFirst { anchorKey(it.text?.toString()) == wanted }
             if (anchorIdx != -1) {
                 val neighbor = rows.getOrNull(anchorIdx + direction)
                 if (neighbor != null) {
