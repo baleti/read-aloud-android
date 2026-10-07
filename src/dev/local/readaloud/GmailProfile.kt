@@ -350,6 +350,9 @@ object GmailProfile : AppProfile {
         repeat(MAX_INBOX_SCROLLS) {
             val rows = listRows(current)
             val anchorIdx = rows.indexOfFirst { anchorKey(it.text?.toString()) == wanted }
+            // content-free diagnostics: shape of the match, not the mail
+            Log.i(TAG, "locateNextRow: rows=${rows.size} wantedLen=${wanted.length} anchorIdx=$anchorIdx dir=$direction " +
+                rows.joinToString(",") { r -> val k = anchorKey(r.text?.toString()); "${k.length}/${k.commonPrefixWith(wanted).length}" })
             if (anchorIdx != -1) {
                 val neighbor = rows.getOrNull(anchorIdx + direction)
                 if (neighbor != null) {
