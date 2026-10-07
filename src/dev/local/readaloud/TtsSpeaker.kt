@@ -179,8 +179,12 @@ object TtsSpeaker {
         OverlayIndicator.show("Read Aloud: generating audio…")
         svc.setListener(object : TtsPlaybackService.HighlightListener {
             override fun onSentenceStart(text: String, words: List<WordTiming>, startMs: Long) {
+                ReadAlongState.words = words
+                ReadAlongState.wordIdx = -1
+                ReadAlongState.sentence = text
                 OverlayIndicator.hide()
             }
+            override fun onWordHighlight(wordIndex: Int) { ReadAlongState.wordIdx = wordIndex }
             override fun onSentenceEnd() {
                 OverlayIndicator.show("Read Aloud: generating audio…")
             }
@@ -189,6 +193,7 @@ object TtsSpeaker {
             }
         })
 
+        ReadAlongState.begin(text)
         svc.startSession(title)
         PlayerActivity.launch(context.applicationContext)
         val wordCount = text.split(Regex("\\s+")).count { it.isNotBlank() }

@@ -12,7 +12,12 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.BackgroundColorSpan
+import android.text.style.ForegroundColorSpan
 import android.util.Log
+import android.view.MotionEvent
 import android.view.Gravity
 import android.view.View
 import android.widget.ImageView
@@ -56,8 +61,23 @@ class PlayerActivity : Activity() {
     private var dragging = false
     private var idleTicks = 0
 
+    // Read-along: full text with the current sentence/word highlighted.
+    private var shownText: String? = null
+    private var spannable: Spannable? = null
+    private var norm = ""
+    private var normMap = IntArray(0)
+    private var cursorNorm = 0
+    private var shownSentence = ""
+    private var shownWordIdx = -2
+    private var sentStart = -1
+    private var sentEnd = -1
+    private val sentenceSpans = arrayOf<Any>(BackgroundColorSpan(0xFF4A3A30.toInt()), ForegroundColorSpan(Theme.onBackground))
+    private val wordSpans = arrayOf<Any>(BackgroundColorSpan(Theme.primary), ForegroundColorSpan(Theme.onPrimary))
+    private var lastUserScrollMs = 0L
+
     private lateinit var titleView: TextView
     private lateinit var sentenceView: TextView
+    private lateinit var scroll: android.widget.ScrollView
     private lateinit var seekBar: SeekBar
     private lateinit var posView: TextView
     private lateinit var durView: TextView
@@ -75,7 +95,7 @@ class PlayerActivity : Activity() {
     private val tick = object : Runnable {
         override fun run() {
             refresh()
-            handler.postDelayed(this, 500)
+            handler.postDelayed(this, 250)
         }
     }
 
@@ -90,10 +110,13 @@ class PlayerActivity : Activity() {
             maxLines = 3; text = "Read Aloud"
         }
         sentenceView = TextView(this).apply {
-            textSize = 17f; setTextColor(Theme.muted); gravity = Gravity.CENTER
-            setLineSpacing(0f, 1.2f)
+            textSize = 17f; setTextColor(Theme.muted); gravity = Gravity.START
+            setLineSpacing(0f, 1.25f)
         }
-        val scroll = android.widget.ScrollView(this).apply { addView(sentenceView) }
+        scroll = android.widget.ScrollView(this).apply {
+            addView(sentenceView)
+            setOnTouchListener { _, ev -> if (ev.action == MotionEvent.ACTION_DOWN || ev.action == MotionEvent.ACTION_MOVE) lastUserScrollMs = System.currentTimeMillis(); false }
+        }
 
         posView = TextView(this).apply { textSize = 12f; setTextColor(Theme.muted); text = "0:00" }
         durView = TextView(this).apply { textSize = 12f; setTextColor(Theme.muted); text = "0:00" }
@@ -171,20 +194,101 @@ class PlayerActivity : Activity() {
         val active = s.hasActiveSession()
         if (!active) {
             // Session over (finished or stopped elsewhere): show it, linger a bit, then close.
-            sentenceView.text = "Finished"
             setIcon(playPause, "ic_play")
             if (++idleTicks > 4) finish()
             return
         }
         idleTicks = 0
         titleView.text = s.currentTitle()
-        sentenceView.text = s.currentSentenceText()
+        updateReadAlong()
         setIcon(playPause, if (s.isPlaying()) "ic_pause" else "ic_play")
         speedBtn.text = formatSpeed(s.currentSpeed())
         if (!dragging) {
             val pos = s.getPositionMs(); val dur = duration()
             seekBar.progress = ((pos * 1000) / dur).toInt().coerceIn(0, 1000)
             posView.text = fmt(pos); durView.text = fmt(dur)
+        }
+    }
+
+    private fun collapse(t: String): Pair<String, IntArray> {
+        val sb = StringBuilder(t.length)
+        val map = IntArray(t.length + 1)
+        var lastSpace = true
+        for (i in t.indices) {
+            val c = t[i]
+            if (c.isWhitespace()) {
+                if (!lastSpace) { map[sb.length] = i; sb.append(' '); lastSpace = true }
+            } else { map[sb.length] = i; sb.append(c); lastSpace = false }
+        }
+        return sb.toString() to map
+    }
+
+    private fun updateReadAlong() {
+        val full = ReadAlongState.fullText
+        if (full.isEmpty()) return
+        if (full !== shownText) {
+            shownText = full
+            spannable = SpannableString(full)
+            sentenceView.setText(spannable, TextView.BufferType.SPANNABLE)
+            spannable = sentenceView.text as Spannable // TextView keeps its own copy; spans must go on that one
+            val (n, m) = collapse(full)
+            norm = n; normMap = m; cursorNorm = 0
+            shownSentence = ""; shownWordIdx = -2; sentStart = -1; sentEnd = -1
+        }
+        val sp = spannable ?: return
+        val sentence = ReadAlongState.sentence
+        if (sentence != shownSentence) {
+            shownSentence = sentence; shownWordIdx = -2
+            for (span in sentenceSpans) sp.removeSpan(span)
+            for (span in wordSpans) sp.removeSpan(span)
+            sentStart = -1; sentEnd = -1
+            val (ns, _) = collapse(sentence)
+            val needle = ns.trim()
+            if (needle.isNotEmpty()) {
+                var at = norm.indexOf(needle, cursorNorm)
+                if (at < 0) at = norm.indexOf(needle)
+                if (at < 0 && needle.length > 30) at = norm.indexOf(needle.take(30))
+                if (at >= 0) {
+                    cursorNorm = at
+                    sentStart = normMap[at]
+                    val lastN = (at + needle.length - 1).coerceAtMost(norm.length - 1)
+                    sentEnd = (normMap[lastN] + 1).coerceAtMost(full.length)
+                    for (span in sentenceSpans) sp.setSpan(span, sentStart, sentEnd, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    scrollToSentence()
+                }
+            }
+        }
+        val wi = ReadAlongState.wordIdx
+        if (wi != shownWordIdx && sentStart >= 0) {
+            shownWordIdx = wi
+            for (span in wordSpans) sp.removeSpan(span)
+            val words = ReadAlongState.words
+            if (wi in words.indices) {
+                // words are the sentence's tokens in order; walk to the wi-th one
+                val text = full.substring(sentStart, sentEnd)
+                var pos = 0
+                var range: IntRange? = null
+                for (i in 0..wi) {
+                    val w = words[i].word.trim()
+                    if (w.isEmpty()) continue
+                    val at = text.indexOf(w, pos)
+                    if (at < 0) { range = null; continue }
+                    range = at until (at + w.length)
+                    pos = at + w.length
+                }
+                range?.let { r ->
+                    for (span in wordSpans) sp.setSpan(span, sentStart + r.first, sentStart + r.last + 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            }
+        }
+    }
+
+    private fun scrollToSentence() {
+        if (System.currentTimeMillis() - lastUserScrollMs < 5000) return
+        sentenceView.post {
+            val layout = sentenceView.layout ?: return@post
+            val line = layout.getLineForOffset(sentStart.coerceAtLeast(0))
+            scroll.smoothScrollTo(0, (layout.getLineTop(line) - scroll.height / 3).coerceAtLeast(0))
         }
     }
 

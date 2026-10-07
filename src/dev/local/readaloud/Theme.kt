@@ -18,6 +18,7 @@ object Theme {
     const val surfaceContainer = 0xFF3A2E28.toInt()
     const val outlineVariant = 0xFF52443C.toInt()
     const val muted = 0xFFB8A89F.toInt()
+    const val onPrimary = 0xFF2A1700.toInt()
     const val bg = 0xFF1C1512.toInt()
     const val primary = 0xFFFFB68A.toInt()
 

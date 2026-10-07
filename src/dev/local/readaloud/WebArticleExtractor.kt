@@ -29,7 +29,7 @@ object WebArticleExtractor {
     } catch (_: Exception) { null }
 
     private val NOISE = Regex(
-        """<(script|style|noscript|svg|nav|header|footer|aside|form|template|iframe|button)\b[^>]*>.*?</\1\s*>""",
+        """<(script|style|noscript|svg|nav|header|footer|aside|form|template|iframe|button|sup|table)\b[^>]*>.*?</\1\s*>""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
     )
     private val COMMENT = Regex("""<!--.*?-->""", RegexOption.DOT_MATCHES_ALL)
@@ -41,7 +41,7 @@ object WebArticleExtractor {
         Regex("""<$tag\b[^>]*>(.*)</$tag\s*>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(html)?.groupValues?.get(1)
 
     private fun plain(fragment: String): String =
-        Html.fromHtml(TAG.replace(fragment, " "), Html.FROM_HTML_MODE_LEGACY).toString()
+        Html.fromHtml(TAG.replace(fragment, ""), Html.FROM_HTML_MODE_LEGACY).toString()
             .replace(' ', ' ').replace(Regex("\\s+"), " ").trim()
 
     fun extract(html: String): Result {
