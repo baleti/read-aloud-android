@@ -815,6 +815,6 @@ object GmailProfile : AppProfile {
             }
             out.add(line)
         }
-        return out
+        return if (isOpenEmailScreen(workingRoot)) EmailCleaner.clean(out) else out
     }
 }
