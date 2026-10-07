@@ -6,7 +6,7 @@ import android.content.Intent
 import android.widget.Toast
 
 /**
- * The entry point dictate-android's AssistActivity calls into (see that
+ * The entry point digital-assistant-android's AssistActivity calls into (see that
  * app's own action-menu entry for "Read Aloud"). Delegates straight to
  * the already-running accessibility service rather than starting a new
  * component -- see ReadAloudAccessibilityService's class doc for why: a

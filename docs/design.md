@@ -2,7 +2,7 @@
 
 ## The idea
 
-A "digital assistant" style action - invoked from dictate-android's
+A "digital assistant" style action - invoked from digital-assistant-android's
 long-press-power action menu, which already holds this device's Digital
 Assistant app slot - that reads aloud whatever app is currently on
 screen. Two layers, deliberately modeled on Firejail's per-app sandbox
@@ -12,16 +12,16 @@ plus a small registry of per-app profile overrides for apps that need
 real work (`AppProfile.kt` / `AppProfileRegistry`). Add a profile object,
 register it, nothing else changes.
 
-## Why a separate app/repo, and how it talks to dictate-android
+## Why a separate app/repo, and how it talks to digital-assistant-android
 
-dictate-android already owns Android's "Digital assistant app" slot via
+digital-assistant-android already owns Android's "Digital assistant app" slot via
 `AssistActivity`'s `ACTION_ASSIST` intent-filter - only one app can hold
 that slot, so Read Aloud can't register its own. Its `actions` list is
 explicitly built to be extended ("Add a new entry to `actions` below for
 anything else that should hang off this same long-press-power slot
 later" - already in that file's own doc before this project started).
 
-So: dictate-android gained one new `MenuItem` ("Read Aloud") that sends an
+So: digital-assistant-android gained one new `MenuItem` ("Read Aloud") that sends an
 explicit broadcast to this app; this app does the actual reading. This
 needed two real bugs found live before it worked at all:
 
@@ -29,7 +29,7 @@ needed two real bugs found live before it worked at all:
    with no target package does not reach a manifest-declared
    `<receiver>` in another app on Android 8+ (implicit-broadcast
    background restrictions). Fixed by `.setPackage("dev.local.readaloud")`
-   on the Intent dictate-android sends.
+   on the Intent digital-assistant-android sends.
 2. **`startForegroundService()` from a `BroadcastReceiver` gets silently
    blocked.** Confirmed live: a `ReadAloudService` component started this
    way from `TriggerReceiver.onReceive()` got a `ServiceRecord` that never
@@ -38,7 +38,7 @@ needed two real bugs found live before it worked at all:
    crash or log to point at it. Fixed by removing that separate service
    entirely: `ReadAloudAccessibilityService` is already alive and
    system-bound the whole time it's enabled (same as TalkBack, same as
-   DictateAccessibilityService), so `TriggerReceiver` just calls a plain
+   AssistantAccessibilityService), so `TriggerReceiver` just calls a plain
    Kotlin method on it directly (`startReading()`) - no new component
    startup needed. Only the final handoff to `TtsPlaybackService` (real
    foreground service, for legitimate continuous media playback) still
@@ -174,7 +174,7 @@ risking unbounded automated interaction it was never tested against.
 
 ## Build system: Gradle (2026-09-13)
 
-Every sibling app in this family (dictate-android, claude-agents-android,
+Every sibling app in this family (digital-assistant-android, claude-agents-android,
 newsdigest-android, peeragent-android) deliberately has zero dependencies
 and a hand-rolled `aapt2 -> kotlinc -> d8 -> apksigner` `build.sh` instead
 of Gradle. This project broke that convention on purpose, and only for
@@ -313,7 +313,7 @@ single-email distinction may already happen implicitly today, purely
 based on which Gmail screen you're on when Read Aloud is invoked (the
 inbox list already reads as a rundown of every visible row). A real
 menu would need an interactive overlay Activity (the same translucent-
-overlay pattern dictate-android's own AssistActivity already uses, not
+overlay pattern digital-assistant-android's own AssistActivity already uses, not
 OverlayIndicator's passive, untouchable banner), shown only for a profile
 that declares more than one mode.
 

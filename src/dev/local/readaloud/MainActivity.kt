@@ -15,7 +15,7 @@ import android.widget.Toast
 /**
  * Deliberately plain (no Theme.kt, unlike the sibling apps) -- this is a
  * once-in-a-while settings/status screen, not something meant to be
- * opened often; the real everyday entry point is dictate-android's
+ * opened often; the real everyday entry point is digital-assistant-android's
  * long-press-power "Read Aloud" action, which never shows this activity
  * at all.
  */
@@ -36,7 +36,7 @@ class MainActivity : Activity() {
         root.addView(TextView(this).apply { text = "Read Aloud"; textSize = 22f })
         root.addView(
             TextView(this).apply {
-                text = "Reads whatever screen is in front when invoked from Dictate's " +
+                text = "Reads whatever screen is in front when invoked from the Digital Assistant's " +
                     "long-press-power menu. Reddit and Gmail get extra handling; every " +
                     "other app gets a best-effort generic read of the accessibility tree."
                 setPadding(0, dp(8), 0, dp(16))
@@ -62,7 +62,7 @@ class MainActivity : Activity() {
                     // query -> profile -> websocket -> playback) even though
                     // reading THIS app's own settings screen back is a silly
                     // thing to actually want -- the everyday path is always
-                    // via TriggerReceiver from dictate-android instead.
+                    // via TriggerReceiver from digital-assistant-android instead.
                     val service = ReadAloudAccessibilityService.instance
                     if (service == null) {
                         Toast.makeText(this@MainActivity, "Enable the accessibility service first", Toast.LENGTH_LONG).show()

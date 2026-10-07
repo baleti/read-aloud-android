@@ -32,7 +32,7 @@ import java.util.concurrent.TimeUnit
  * blocking it, since a freshly-triggered BroadcastReceiver carries none of
  * the exemptions a real foreground context has. This service is already
  * alive and system-bound the entire time it's enabled (same as TalkBack,
- * same as dictate-android's own DictateAccessibilityService), so running
+ * same as digital-assistant-android's own AssistantAccessibilityService), so running
  * the work directly on a background thread here needs no new component
  * startup at all, and only the final handoff to TtsPlaybackService (a
  * real foreground service, for legitimate continuous media playback)
@@ -156,9 +156,9 @@ class ReadAloudAccessibilityService : AccessibilityService() {
         TtsSpeaker.speak(this, labelFor(pkg), text)
     }
 
-    /** The overlay that triggered this (dictate-android's AssistActivity,
+    /** The overlay that triggered this (digital-assistant-android's AssistActivity,
      * or ModeChooserActivity) may not have finished handing focus back to
-     * the real app yet -- same race DictateAccessibilityService's own doc
+     * the real app yet -- same race AssistantAccessibilityService's own doc
      * already found and solved the same way: a short retry loop rather
      * than one fixed delay. */
     /** `expectedPackage`, when given, rejects a transiently-wrong window
@@ -370,7 +370,7 @@ class ReadAloudAccessibilityService : AccessibilityService() {
     /** The window ReadAloudService should read: whichever currently-visible
      * window does NOT belong to this app itself (our own trigger has
      * already finished by the time this runs, but a stale reference to it
-     * is exactly the bug DictateAccessibilityService's own doc already
+     * is exactly the bug AssistantAccessibilityService's own doc already
      * found here -- same fix, same reasoning: rootInActiveWindow lags
      * reality for a stretch right after an overlay activity finishes, so
      * this falls back to scanning every window). Returns the foreground

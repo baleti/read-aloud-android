@@ -14,10 +14,10 @@ import android.widget.TextView
  * The chooser shown when the detected app's profile offers more than one
  * mode for the current screen (asked for explicitly 2026-09-13: Gmail
  * should offer "this email"/"onwards"/"backwards" when an email is open).
- * Styled to match dictate-android's own action-menu card exactly (same
+ * Styled to match digital-assistant-android's own action-menu card exactly (same
  * Theme.kt palette/helpers) - asked for explicitly, since this is
  * effectively a second instance of the same kind of menu, just launched
- * from ReadAloudAccessibilityService itself rather than dictate-android
+ * from ReadAloudAccessibilityService itself rather than digital-assistant-android
  * (which has no way to know in advance whether the foreground app's
  * profile offers more than one mode).
  *

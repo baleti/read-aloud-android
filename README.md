@@ -1,7 +1,7 @@
 # Read Aloud
 
 Reads whatever app is currently on screen, aloud - invoked from
-[dictate-android](https://github.com/baleti/dictate-android)'s long-press-power
+[digital-assistant-android](https://github.com/baleti/digital-assistant-android)'s long-press-power
 action menu (the "Complete action using" overlay Android shows for its
 Digital Assistant app slot), not from an icon you tap. Built with Gradle
 (the only app in this family that needs it - see below); everything else
@@ -54,7 +54,7 @@ restructured).
    Android Gradle Plugin version this uses).
 2. `adb install -r build/outputs/apk/debug/read-aloud-android-debug.apk`
 3. Settings -> Accessibility -> enable "Read Aloud".
-4. In dictate-android's own action menu (long-press-power, or however
+4. In digital-assistant-android's own action menu (long-press-power, or however
    your device's Digital Assistant gesture is bound), tap "Read Aloud" -
    or, for Reddit specifically, tap Share on a post/comment and pick
    "Read Aloud" from the share sheet instead.
