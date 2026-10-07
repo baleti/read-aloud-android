@@ -708,7 +708,13 @@ class TtsPlaybackService : Service() {
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build(),
             )
-            .setBufferSizeInBytes(maxOf(minBuf, 16384))
+            // Speed changes need a big enough buffer: AudioTrack refuses a
+            // rate change when mFrameCount < the minimum for that speed
+            // (logcat: "setPlaybackRate failed (buffer size)" at 24kHz,
+            // 8192 frames, 1.6x-2.7x), so the highlighter sped up but the
+            // audio never did (reported 2026-10-07). 64KB = 32768 frames
+            // covers the 3x maximum.
+            .setBufferSizeInBytes(maxOf(minBuf, 65536))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
     }
