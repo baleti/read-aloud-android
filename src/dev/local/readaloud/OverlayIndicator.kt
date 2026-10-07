@@ -50,6 +50,9 @@ object OverlayIndicator {
     private var view: TextView? = null
     private var baseText = ""
     private var waiting = false
+    // Set by PlayerActivity while it's on screen: it shows the same status
+    // itself (statusLine()), so the floating banner on top of it is redundant.
+    @Volatile var suppressed = false
     private var visibleSinceNanos = 0L
     private var lastActivityNanos = 0L
     // Steps of the ONE sentence playback is blocked on (server forwards only
@@ -108,6 +111,7 @@ object OverlayIndicator {
 
     fun show(text: String) {
         mainHandler.post {
+            if (suppressed) { baseText = text; waiting = true; lastActivityNanos = System.nanoTime(); return@post }
             lastActivityNanos = System.nanoTime()
             baseText = text
             mainHandler.removeCallbacks(hideRunnable)
@@ -117,7 +121,24 @@ object OverlayIndicator {
         }
     }
 
+    /** One-line status for PlayerActivity (main thread): null when nothing is being waited on. */
+    fun statusLine(): String? {
+        if (!waiting) return null
+        val sb = StringBuilder(baseText)
+        if (sentence > 0) sb.append(" (sentence ").append(sentence).append(" of ").append(sentenceCount).append(')')
+        return sb.toString()
+    }
+
+    fun suppress(value: Boolean) {
+        mainHandler.post {
+            suppressed = value
+            if (value) removeView()
+            else if (waiting) createView()
+        }
+    }
+
     private fun createView() {
+        if (suppressed) return
         val service = ReadAloudAccessibilityService.instance ?: return
         if (view != null) return
         val tv = TextView(service).apply {

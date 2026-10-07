@@ -78,6 +78,7 @@ class PlayerActivity : Activity() {
     private lateinit var titleView: TextView
     private lateinit var sentenceView: TextView
     private lateinit var scroll: android.widget.ScrollView
+    private lateinit var statusView: TextView
     private lateinit var seekBar: SeekBar
     private lateinit var posView: TextView
     private lateinit var durView: TextView
@@ -112,6 +113,9 @@ class PlayerActivity : Activity() {
         sentenceView = TextView(this).apply {
             textSize = 17f; setTextColor(Theme.muted); gravity = Gravity.START
             setLineSpacing(0f, 1.25f)
+        }
+        statusView = TextView(this).apply {
+            textSize = 12f; setTextColor(Theme.primary); gravity = Gravity.CENTER; visibility = View.GONE
         }
         scroll = android.widget.ScrollView(this).apply {
             addView(sentenceView)
@@ -163,6 +167,7 @@ class PlayerActivity : Activity() {
             setBackgroundColor(Theme.bg)
             setPadding(dp(24), dp(48), dp(24), dp(32))
             addView(titleView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+            addView(statusView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
             addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(24); bottomMargin = dp(24) })
             addView(scrubber, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(controls, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
@@ -170,6 +175,9 @@ class PlayerActivity : Activity() {
         setContentView(root)
         bindService(Intent(this, TtsPlaybackService::class.java), connection, Context.BIND_AUTO_CREATE)
     }
+
+    override fun onResume() { super.onResume(); OverlayIndicator.suppress(true) }
+    override fun onPause() { OverlayIndicator.suppress(false); super.onPause() }
 
     override fun onDestroy() {
         handler.removeCallbacks(tick)
@@ -199,6 +207,7 @@ class PlayerActivity : Activity() {
             return
         }
         idleTicks = 0
+        OverlayIndicator.statusLine().let { statusView.text = it ?: ""; statusView.visibility = if (it == null) View.GONE else View.VISIBLE }
         titleView.text = s.currentTitle()
         updateReadAlong()
         setIcon(playPause, if (s.isPlaying()) "ic_pause" else "ic_play")
