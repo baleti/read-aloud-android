@@ -399,13 +399,11 @@ object GmailProfile : AppProfile {
             val emailRoot = opened ?: run { service.toast("The next email didn't open in time"); return }
             if (service.isSuperseded(generation)) return
 
-            val lines = try { extract(service, emailRoot, "this_email") } catch (e: Exception) { emptyList() }
-            val text = lines.joinToString("\n").trim()
-            Log.i(TAG, "runInboxSequence: email $steps, ${text.length} chars")
-            if (text.isNotBlank()) {
-                service.toast("Reading email ${steps} (${label})")
-                TtsSpeaker.speak(service, label, text, waitUntilPlaybackDone = true)
-            }
+            // Read this email the way a single open email is read (ScrollReader): from its top, expanding
+            // collapsed messages and scrolling down the thread until its end, THEN on to the next email.
+            Log.i(TAG, "runInboxSequence: reading email $steps")
+            service.toast("Reading email ${steps} (${label})")
+            ScrollReader.run(service, packageName, this, label, generation, waitUntilDone = true)
 
             lastRowText = targetText
         }

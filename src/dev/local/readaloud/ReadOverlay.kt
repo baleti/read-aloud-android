@@ -263,7 +263,7 @@ object ReadOverlay {
     private fun syncControls() {
         val s = tts ?: return
         if (!s.hasActiveSession()) {
-            if (++idleTicks > 6) hide()
+            if (++idleTicks > 24) hide() // ~6s: bridges the gap between emails in a Gmail inbox read
             return
         }
         idleTicks = 0

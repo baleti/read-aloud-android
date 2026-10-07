@@ -29,7 +29,12 @@ object ScrollReader {
     private const val SETTLE_AFTER_SCROLL_MS = 600L
     private const val RECENT_LINES = 300
 
-    fun run(service: ReadAloudAccessibilityService, pkg: String, profile: AppProfile, label: String, generation: Int) {
+    fun run(
+        service: ReadAloudAccessibilityService, pkg: String, profile: AppProfile, label: String, generation: Int,
+        // Gmail's inbox sequence reads email after email: don't return until this one has been SPOKEN,
+        // not just scrolled through, or the sequence would navigate away mid-sentence.
+        waitUntilDone: Boolean = false,
+    ) {
         var tts: TtsPlaybackService? = null
         val conn = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, binder: IBinder?) { tts = (binder as TtsPlaybackService.LocalBinder).service() }
@@ -47,6 +52,12 @@ object ScrollReader {
         } finally {
             ReadAlongState.streaming = false
             try { TtsSpeaker.finishOpenSession(service) } catch (_: Exception) {}
+            if (waitUntilDone) {
+                var waited = 0L
+                while (!service.isSuperseded(generation) && tts?.hasActiveSession() == true && waited < 30 * 60 * 1000L) {
+                    Thread.sleep(300); waited += 300
+                }
+            }
             try { service.unbindService(conn) } catch (_: Exception) {}
         }
     }
