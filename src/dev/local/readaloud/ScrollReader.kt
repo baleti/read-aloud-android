@@ -34,6 +34,8 @@ object ScrollReader {
         // Gmail's inbox sequence reads email after email: don't return until this one has been SPOKEN,
         // not just scrolled through, or the sequence would navigate away mid-sentence.
         waitUntilDone: Boolean = false,
+        // Spoken before the first screenful, like a voice assistant announcing what's next ("Next email.").
+        intro: String? = null,
     ) {
         var tts: TtsPlaybackService? = null
         val conn = object : ServiceConnection {
@@ -44,7 +46,7 @@ object ScrollReader {
         val filter = profile.newStreamFilter()
         ReadAlongState.streaming = true
         try {
-            loop(service, pkg, profile, filter, label, generation) { tts }
+            loop(service, pkg, profile, filter, label, generation, intro) { tts }
             val tail = filter.finish().joinToString("\n").trim()
             if (tail.isNotBlank() && !service.isSuperseded(generation) && tts?.hasActiveSession() == true) {
                 TtsSpeaker.speak(service, label, tail, continueSession = true, keepOpen = true)
@@ -64,7 +66,7 @@ object ScrollReader {
 
     private fun loop(
         service: ReadAloudAccessibilityService, pkg: String, profile: AppProfile, filter: StreamFilter, label: String,
-        generation: Int, tts: () -> TtsPlaybackService?,
+        generation: Int, intro: String?, tts: () -> TtsPlaybackService?,
     ) {
         val recent = LinkedHashSet<String>()
         var first = true
@@ -89,7 +91,8 @@ object ScrollReader {
             while (recent.size > RECENT_LINES) recent.remove(recent.first())
 
             val toSpeak = filter.feed(fresh)
-            val text = toSpeak.joinToString("\n").trim()
+            var text = toSpeak.joinToString("\n").trim()
+            if (first && text.isNotBlank() && intro != null) text = "$intro\n$text"
             if (fresh.isEmpty()) stagnant++ else stagnant = 0
             if (text.isNotBlank()) {
                 if (first) service.toastReading(label)

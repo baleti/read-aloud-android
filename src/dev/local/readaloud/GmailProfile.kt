@@ -380,7 +380,9 @@ object GmailProfile : AppProfile {
             pendingIndex = null
             Log.i(TAG, "runInboxSequence: step=$steps target=${target != null}")
             if (target == null) {
-                service.toast(if (direction < 0) "Reached the top of the inbox" else "Reached the end of the inbox")
+                val msg = if (direction < 0) "That was the first email in your inbox." else "That was the last email in your inbox."
+                service.toast(msg)
+                if (steps > 1) TtsSpeaker.speak(service, label, msg, waitUntilPlaybackDone = true)
                 return
             }
             val targetText = target.text?.toString() ?: ""
@@ -403,7 +405,12 @@ object GmailProfile : AppProfile {
             // collapsed messages and scrolling down the thread until its end, THEN on to the next email.
             Log.i(TAG, "runInboxSequence: reading email $steps")
             service.toast("Reading email ${steps} (${label})")
-            ScrollReader.run(service, packageName, this, label, generation, waitUntilDone = true)
+            val intro = when {
+                direction < 0 -> "Previous email."
+                steps == 1 && startIndex == 0 -> "First email."
+                else -> "Next email."
+            }
+            ScrollReader.run(service, packageName, this, label, generation, waitUntilDone = true, intro = intro)
 
             lastRowText = targetText
         }
