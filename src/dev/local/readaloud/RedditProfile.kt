@@ -185,6 +185,32 @@ object RedditProfile : AppProfile {
         return seen.toList()
     }
 
+    // Streaming read (ScrollReader): one screenful at a time. Compose only exposes its semantics
+    // while touch exploration is on, but touch exploration breaks swipe-scrolling, so it is turned
+    // on just around the tree read / expand click and off again before the reader scrolls.
+    override fun screenLines(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String> {
+        val lines = service.withTouchExplorationMode {
+            val fresh = service.foregroundRoot()?.second ?: root
+            filterUsernames(AccessibilityTree.collectText(fresh))
+        }
+        service.disableTouchExplorationNow()
+        if (lines.sumOf { it.length } >= MIN_CHARS_BEFORE_FALLBACKS) return lines
+        return service.ocrScreenshot().lines().map { it.trim() }.filter { it.isNotBlank() }
+    }
+
+    override fun expandVisible(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): Boolean {
+        val clicked = service.withTouchExplorationMode {
+            val fresh = service.foregroundRoot()?.second ?: root
+            val more = AccessibilityTree.findNode(fresh) { n ->
+                n.isClickable && (MORE_REPLIES.containsMatchIn(AccessibilityTree.textOf(n)) || MORE_COMMENTS.containsMatchIn(AccessibilityTree.textOf(n)))
+            }
+            more != null && service.click(more)
+        }
+        service.disableTouchExplorationNow()
+        if (clicked) Thread.sleep(700) // a real network fetch sits behind "more replies"
+        return clicked
+    }
+
     override fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo, mode: String): List<String> {
         val seen = LinkedHashSet<String>()
 

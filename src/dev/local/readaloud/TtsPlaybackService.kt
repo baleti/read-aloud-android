@@ -409,6 +409,9 @@ class TtsPlaybackService : Service() {
      * in its own UI at all. */
     fun hasActiveSession(): Boolean = hasActiveSession
 
+    /** End (ms, on the same timeline as getPositionMs) of everything enqueued so far. */
+    fun enqueuedEndMs(): Long = synchronized(lock) { positionMsUpTo(allSentences.size) }
+
     /** Sentence currently (or most recently) being spoken, for a player UI. */
     fun currentSentenceText(): String = lastSentenceText
     fun currentTitle(): String = currentTitle

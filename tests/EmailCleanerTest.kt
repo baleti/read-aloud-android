@@ -3,6 +3,13 @@ import dev.local.readaloud.EmailCleaner
 fun check(name: String, input: List<String>, expected: List<String>) {
     val got = EmailCleaner.clean(input)
     println((if (got == expected) "PASS " else "FAIL ") + name + (if (got == expected) "" else "\n  got:      $got\n  expected: $expected"))
+    // The streamed version (state carried across screens) must agree however the lines are split.
+    for (split in 0..input.size) {
+        val st = EmailCleaner.Stream()
+        val sgot = st.feed(input.subList(0, split)) + st.feed(input.subList(split, input.size)) + st.finish()
+        // lines still held back at the very end (e.g. a trailing signature) are dropped, as they should be
+        if (sgot != expected) println("FAIL stream[$name] split=$split\n  got:      $sgot\n  expected: $expected")
+    }
 }
 fun main() {
     check("quote attribution",

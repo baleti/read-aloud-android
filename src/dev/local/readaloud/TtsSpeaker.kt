@@ -96,6 +96,25 @@ object TtsSpeaker {
      * object's own doc for the incident that made the network half of
      * this matter). A brief bind-just-to-call-stopAll(), not a lasting
      * connection. */
+    /** Ends a keepOpen session: nothing more is coming, let the queue drain. */
+    fun finishOpenSession(context: Context) {
+        var svc: TtsPlaybackService? = null
+        val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                svc = (binder as TtsPlaybackService.LocalBinder).service()
+            }
+            override fun onServiceDisconnected(name: ComponentName?) {}
+        }
+        try {
+            context.bindService(Intent(context, TtsPlaybackService::class.java), connection, Context.BIND_AUTO_CREATE)
+            var waited = 0
+            while (svc == null && waited < 3000) { Thread.sleep(50); waited += 50 }
+            svc?.endSession()
+        } finally {
+            try { context.unbindService(connection) } catch (_: Exception) {}
+        }
+    }
+
     fun stopCurrent(context: Context) {
         closeActiveWs()
         var svc: TtsPlaybackService? = null
@@ -130,7 +149,18 @@ object TtsSpeaker {
      * single email/article read should legitimately take longer than
      * that, and a hard cap here is a second, independent backstop against
      * a repeat of the same runaway-loop incident. */
-    fun speak(context: Context, title: String, text: String, waitUntilPlaybackDone: Boolean = false) {
+    fun speak(
+        context: Context,
+        title: String,
+        text: String,
+        waitUntilPlaybackDone: Boolean = false,
+        // Streaming reads (ScrollReader): feed a screenful at a time into ONE
+        // playback session. continueSession skips startSession() and appends to
+        // what's queued; keepOpen leaves the session un-ended so the next chunk
+        // can follow (the reader calls finishOpenSession() at the very end).
+        continueSession: Boolean = false,
+        keepOpen: Boolean = false,
+    ) {
         // A new speak() call ALWAYS supersedes whatever was in flight
         // before, on the network side too - see this object's own doc.
         closeActiveWs()
@@ -193,11 +223,20 @@ object TtsSpeaker {
             }
         })
 
-        ReadAlongState.begin(text)
-        svc.startSession(title)
-        PlayerActivity.launch(context.applicationContext)
+        if (continueSession) {
+            ReadAlongState.append(text)
+        } else {
+            ReadAlongState.begin(text)
+            svc.startSession(title)
+        }
+        ReadAlongState.sections.add(svc.enqueuedEndMs())
+        if (!continueSession) {
+            val a11y = ReadAloudAccessibilityService.instance
+            if (a11y != null) ReadOverlay.show(a11y) else PlayerActivity.launch(context.applicationContext)
+        }
         val wordCount = text.split(Regex("\\s+")).count { it.isNotBlank() }
-        svc.setEstimatedDuration((wordCount / (160.0 / 60.0) * 1000).toLong())
+        val chunkEstimateMs = (wordCount / (160.0 / 60.0) * 1000).toLong()
+        svc.setEstimatedDuration(if (continueSession) svc.getDisplayDurationMs() + chunkEstimateMs else chunkEstimateMs)
 
         val active = java.util.concurrent.atomic.AtomicBoolean(true)
         val ws = WebSocketClient(
@@ -260,7 +299,7 @@ object TtsSpeaker {
                 // Local covered everything (server dead or hopelessly slow):
                 // end the session ourselves and release the blocking connect().
                 val finish = synchronized(feedLock) { active.get() && !serverTookOver }
-                if (finish) { active.set(false); svc.endSession(); ws.close() }
+                if (finish) { active.set(false); if (!keepOpen) svc.endSession(); ws.close() }
             }.apply { isDaemon = true; name = "TtsSpeakerLocal"; start() }
         }
 
@@ -286,13 +325,13 @@ object TtsSpeaker {
                     "done" -> {
                         // Everything was either enqueued by the server or
                         // already covered by local audio.
-                        active.set(false); svc.endSession(); ws.close(); OverlayIndicator.hide()
+                        active.set(false); if (!keepOpen) svc.endSession(); ws.close(); OverlayIndicator.hide()
                     }
                     "error" -> {
                         Log.e(TAG, "server error: ${obj.optString("message")}")
                         if (localSentences.isNotEmpty() && !serverTookOver) return // local TTS keeps reading
                         active.set(false)
-                        svc.endSession()
+                        if (!keepOpen) svc.endSession()
                         ws.close()
                         OverlayIndicator.hide()
                     }

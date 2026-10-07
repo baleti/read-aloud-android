@@ -20,6 +20,32 @@ import android.view.accessibility.AccessibilityNodeInfo
 object GenericProfile : AppProfile {
     override val packageName: String = "*generic*" // never registered under this key -- see AppProfileRegistry
 
+    /** One screenful. Reads only the main scrollable area when there is one that fills most
+     * of the screen (so toolbars, tab bars and bottom navigation aren't read every screen),
+     * and falls back to the whole window otherwise. */
+    override fun screenLines(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String> =
+        AccessibilityTree.collectText(mainScope(root))
+
+    /** Any visible, collapsed accordion/section the app exposes as expandable (web `aria-expanded`
+     * headings such as Wikipedia mobile's collapsed sections, expandable list rows). One per call. */
+    override fun expandVisible(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): Boolean {
+        val node = AccessibilityTree.findNode(mainScope(root)) { n ->
+            n.isVisibleToUser && n.actionList.any { it.id == AccessibilityNodeInfo.ACTION_EXPAND }
+        } ?: return false
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_EXPAND)) return false
+        Thread.sleep(350) // let the expanded content render before the screen is re-read
+        return true
+    }
+
+    fun mainScope(root: AccessibilityNodeInfo): AccessibilityNodeInfo {
+        val rootBounds = android.graphics.Rect().also { root.getBoundsInScreen(it) }
+        val main = AccessibilityTree.largestScrollable(root)
+        return if (main != null) {
+            val r = android.graphics.Rect().also { main.getBoundsInScreen(it) }
+            if (r.width().toLong() * r.height() >= rootBounds.width().toLong() * rootBounds.height() * 0.4) main else root
+        } else root
+    }
+
     override fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo, mode: String): List<String> =
         AccessibilityTree.collectText(root).let { lines ->
             // A tree with almost no text (canvas/game/Compose-without-semantics/

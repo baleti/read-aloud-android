@@ -176,8 +176,8 @@ class PlayerActivity : Activity() {
         bindService(Intent(this, TtsPlaybackService::class.java), connection, Context.BIND_AUTO_CREATE)
     }
 
-    override fun onResume() { super.onResume(); OverlayIndicator.suppress(true) }
-    override fun onPause() { OverlayIndicator.suppress(false); super.onPause() }
+    override fun onResume() { super.onResume(); OverlayIndicator.suppress(true); ReadOverlay.setSuppressed(true) }
+    override fun onPause() { OverlayIndicator.suppress(false); ReadOverlay.setSuppressed(false); super.onPause() }
 
     override fun onDestroy() {
         handler.removeCallbacks(tick)

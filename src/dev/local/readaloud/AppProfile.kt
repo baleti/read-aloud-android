@@ -64,7 +64,27 @@ interface AppProfile {
      * modes (including every non-Gmail profile's only mode) are the
      * simple case. */
     fun runMode(service: ReadAloudAccessibilityService, mode: String, label: String): Boolean = false
+
+    // ---- streaming reads (ScrollReader): read from where the screen is, scroll as it reads ----
+
+    /** True when `mode` should be read by ScrollReader: speak what's on screen NOW, then
+     * scroll steadily and keep reading until the content ends. */
+    fun streams(mode: String): Boolean = mode == DEFAULT_MODE
+
+    /** The lines on screen right now, in reading order - one screenful, no scrolling. */
+    fun screenLines(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String> =
+        GenericProfile.screenLines(service, root)
+
+    /** Expand ONE collapsed thing currently on screen (a collapsed email, "N more replies"...).
+     * Returns true if it clicked something, so the caller re-reads the screen. */
+    fun expandVisible(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): Boolean =
+        GenericProfile.expandVisible(service, root)
+
+    /** Per-read stateful cleanup of the lines ScrollReader is about to speak (strip quoted
+     * replies, signatures...). A new filter is made per read, so it may carry state across screens. */
+    fun newStreamFilter(): StreamFilter = object : StreamFilter { override fun feed(lines: List<String>) = lines }
 }
+
 
 object AppProfileRegistry {
     private val profiles: Map<String, AppProfile> = listOf(

@@ -776,6 +776,26 @@ object GmailProfile : AppProfile {
         return current
     }
 
+    // Streaming read of an open email/thread (see ScrollReader): read the visible screen now, expand
+    // collapsed messages as they come into view, scroll, repeat.
+    override fun streams(mode: String): Boolean = mode == "this_email"
+
+    override fun screenLines(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String> =
+        AccessibilityTree.collectTextWithLabels(GenericProfile.mainScope(root), FIELD_LABELS).map {
+            if (it.startsWith("Subject: ")) "Subject: " + stripTrailingLabels(it.removePrefix("Subject: ")) else it
+        }
+
+    override fun expandVisible(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): Boolean {
+        val target = AccessibilityTree.findNode(root) { it.viewIdResourceName?.endsWith("super_collapsed_block") == true }
+            ?: collapsedMessageTarget(root)
+            ?: return false
+        if (!service.click(target)) return false
+        Thread.sleep(400) // let the expanded body render before the screen is re-read
+        return true
+    }
+
+    override fun newStreamFilter(): StreamFilter = EmailCleaner.Stream()
+
     override fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo, mode: String): List<String> {
         val workingRoot = if (isOpenEmailScreen(root)) expandCollapsedMessages(service, root) else root
         val all = AccessibilityTree.collectTextWithLabels(workingRoot, FIELD_LABELS)

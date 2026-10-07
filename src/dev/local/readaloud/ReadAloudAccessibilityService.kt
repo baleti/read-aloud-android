@@ -119,8 +119,15 @@ class ReadAloudAccessibilityService : AccessibilityService() {
         }.apply { isDaemon = true; name = "ReadAloudExtract"; start() }
     }
 
+    fun toastReading(label: String) = toast("Reading $label…")
+    fun toastNothing() = toast("Nothing readable found on screen")
+
     private fun readWithMode(pkg: String, profile: AppProfile, mode: String, generation: Int) {
         if (isSuperseded(generation)) return
+        if (profile.streams(mode)) {
+            ScrollReader.run(this, pkg, profile, labelFor(pkg), generation)
+            return
+        }
         // A scripted multi-step mode (Gmail's inbox sequence) handles its
         // own extraction/navigation/speak calls entirely - nothing left
         // to do here if it says it took care of `mode`.
@@ -225,7 +232,7 @@ class ReadAloudAccessibilityService : AccessibilityService() {
      * accessibility_service_config.xml for setServiceInfo() to actually
      * apply the flag -- declaring it there does NOT turn it on by itself,
      * only calling this does. */
-    private fun <T> withTouchExplorationMode(block: () -> T): T {
+    fun <T> withTouchExplorationMode(block: () -> T): T {
         val info = serviceInfo
         val original = info.flags
         info.flags = original or android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE

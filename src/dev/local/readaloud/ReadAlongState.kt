@@ -13,7 +13,16 @@ object ReadAlongState {
     @Volatile var words: List<WordTiming> = emptyList()
     @Volatile var wordIdx: Int = -1
 
+    /** Start (ms, service timeline) of each streamed chunk/"section", for skip-section controls. */
+    val sections: MutableList<Long> = java.util.Collections.synchronizedList(ArrayList())
+
+    /** Streaming reads feed one screenful at a time; the player's full text grows with them. */
+    fun append(text: String) {
+        fullText = if (fullText.isEmpty()) text else fullText + "\n\n" + text
+    }
+
     fun begin(text: String) {
+        sections.clear()
         fullText = text
         sentence = ""
         words = emptyList()
