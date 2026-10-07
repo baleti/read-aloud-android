@@ -103,6 +103,13 @@ object GmailProfile : AppProfile {
         "sender_name" to "From",
     )
 
+    // Streaming reads also announce who it was sent to and when - "otherwise it's hard to get context of
+    // the email" (asked for 2026-10-07). The extra lines carry EmailCleaner.HEADER_MARK, see there.
+    private val STREAM_LABELS = FIELD_LABELS + mapOf(
+        "upper_date" to "Date",
+        "recipient_summary" to "To",
+    )
+
     private fun isOpenEmailScreen(root: AccessibilityNodeInfo): Boolean =
         AccessibilityTree.findNode(root) { it.viewIdResourceName?.endsWith("subject_and_folder_view") == true } != null
 
@@ -786,8 +793,14 @@ object GmailProfile : AppProfile {
     override fun streams(mode: String): Boolean = mode == "this_email"
 
     override fun screenLines(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String> =
-        AccessibilityTree.collectTextWithLabels(GenericProfile.mainScope(root), FIELD_LABELS).map {
-            if (it.startsWith("Subject: ")) "Subject: " + stripTrailingLabels(it.removePrefix("Subject: ")) else it
+        AccessibilityTree.collectTextWithLabels(GenericProfile.mainScope(root), STREAM_LABELS).mapNotNull {
+            val m = EmailCleaner.HEADER_MARK
+            when {
+                it.startsWith("Subject: ") -> m + "Subject: " + stripTrailingLabels(it.removePrefix("Subject: "))
+                it.startsWith("To: ") -> EmailCleaner.summarizeRecipients(it.removePrefix("To: ")).takeIf { r -> r.isNotBlank() }?.let { r -> m + "To: " + r }
+                it.startsWith("Date: ") -> m + it
+                else -> it
+            }
         }
 
     override fun expandVisible(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): Boolean {

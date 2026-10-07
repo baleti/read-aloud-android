@@ -13,6 +13,11 @@ package dev.local.readaloud
  * three lines by "Sent:"/"To:"/"Date:"), which is quote, not a new message.
  */
 object EmailCleaner {
+    /** Prefix on the header lines GmailProfile adds for context ("Subject:", "To:", "Date:"). It keeps
+     * them from being mistaken for an Outlook-style quoted header, and from counting as body content;
+     * ScrollReader strips it before the text is spoken. */
+    const val HEADER_MARK = "\u2063"
+
     // "On Tue, 6 Oct 2026 at 10:00, X <x@y.z> wrote:" and common translations.
     private val ATTRIBUTION = Regex(
         """^(On|Le|Am|El|Il|Op|Den)\s.{4,200}?\b(wrote|a écrit|schrieb|escribió|ha scritto|schreef|skrev)\s*:?$""",
@@ -26,6 +31,27 @@ object EmailCleaner {
         """^(best regards|kind regards|warm regards|regards|best wishes|best|thanks|thank you|many thanks|cheers|sincerely|yours sincerely|yours faithfully|yours|with thanks|thanks again|bw|br)\s*[,!.]*$""",
         RegexOption.IGNORE_CASE,
     )
+
+    /** "to me, Bob, alice@x.com, +3" -> "me and 5 others"; one recipient stays as is.
+     * Reading every recipient aloud is noise (asked for 2026-10-07). */
+    fun summarizeRecipients(raw: String): String {
+        var text = raw.trim().removePrefix("to ").trim()
+        var extra = 0
+        Regex("""^(.*?)\s+and\s+(\d+)\s+others?$""", RegexOption.IGNORE_CASE).find(text)?.let {
+            extra += it.groupValues[2].toInt(); text = it.groupValues[1]
+        }
+        val names = text.split(',').map { it.trim() }.filter { it.isNotEmpty() }.filter {
+            val plus = Regex("""^\+(\d+)$""").find(it)
+            if (plus != null) { extra += plus.groupValues[1].toInt(); false } else true
+        }
+        if (names.isEmpty()) return ""
+        val others = names.size - 1 + extra
+        return when (others) {
+            0 -> names[0]
+            1 -> "${names[0]} and 1 other"
+            else -> "${names[0]} and $others others"
+        }
+    }
 
     private const val MAX_SIGNATURE_LINES = 8
     private const val MAX_SIGNATURE_LINE_CHARS = 120
@@ -52,7 +78,7 @@ object EmailCleaner {
         if (seg.isEmpty()) return seg
         // Header lines the profile adds ("From: x", "Subject: y") are never cut.
         var bodyStart = 0
-        while (bodyStart < seg.size && (seg[bodyStart].startsWith("From: ") || seg[bodyStart].startsWith("Subject: "))) bodyStart++
+        while (bodyStart < seg.size && (seg[bodyStart].startsWith("From: ") || seg[bodyStart].startsWith("Subject: ") || seg[bodyStart].startsWith(HEADER_MARK))) bodyStart++
         val body = seg.subList(bodyStart, seg.size)
 
         var end = body.size
@@ -145,6 +171,8 @@ object EmailCleaner {
         }
 
         private fun process(line: String, out: MutableList<String>) {
+            // context header, not body; when something is held back, queue behind it to keep the order
+            if (line.startsWith(HEADER_MARK) && kind == Kind.NONE) { out.add(line); return }
             val t = line.trim()
             if (kind != Kind.NONE) {
                 pending.add(line)

@@ -80,7 +80,8 @@ object AccessibilityTree {
         // descending into real content).
         val desc = node.contentDescription?.toString()?.trim()
         if (!desc.isNullOrBlank() && !node.isScrollable) {
-            out.add(desc)
+            val descLabel = ownResId?.let { labels[it] }
+            out.add(if (descLabel != null) "$descLabel: $desc" else desc)
             return // atomic announcement -- see class doc, don't also read the children
         }
         val text = node.text?.toString()?.trim()

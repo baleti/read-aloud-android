@@ -91,7 +91,7 @@ object ScrollReader {
             while (recent.size > RECENT_LINES) recent.remove(recent.first())
 
             val toSpeak = filter.feed(fresh)
-            var text = toSpeak.joinToString("\n").trim()
+            var text = toSpeak.joinToString("\n") { it.replace(EmailCleaner.HEADER_MARK, "") }.trim()
             if (first && text.isNotBlank() && intro != null) text = "$intro\n$text"
             if (fresh.isEmpty()) stagnant++ else stagnant = 0
             if (text.isNotBlank()) {

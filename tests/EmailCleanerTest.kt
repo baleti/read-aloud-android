@@ -35,4 +35,15 @@ fun main() {
         listOf("Subject: Re: X", "From: Ann", "First reply.", "From: Bob", "Second reply.", "Regards,", "From: Cy", "Third."))
     check("plain email untouched", listOf("Subject: Hi", "From: Ann", "Just a note.", "Another line."), listOf("Subject: Hi", "From: Ann", "Just a note.", "Another line."))
     check("original message", listOf("From: Ann", "Fwd please", "-----Original Message-----", "From: Bob", "Sent: x", "old"), listOf("From: Ann", "Fwd please"))
+    val m = EmailCleaner.HEADER_MARK
+    check("context headers kept, not mistaken for outlook quote",
+        listOf(m + "Subject: Plan", "From: Ann", m + "Date: 6 Oct", m + "To: me", "See you Monday.", "On Tue, Bob wrote:", "q"),
+        listOf(m + "Subject: Plan", "From: Ann", m + "Date: 6 Oct", m + "To: me", "See you Monday."))
+    for ((raw, want) in listOf(
+        "to me" to "me", "to me, Bob" to "me and 1 other", "to sam@example.com, a@b.com, c@d.com, e@f.com, g@h.com" to "sam@example.com and 4 others",
+        "to sam@example.com and 4 others" to "sam@example.com and 4 others", "to me, Bob, +3" to "me and 4 others", "" to "",
+    )) {
+        val got = EmailCleaner.summarizeRecipients(raw)
+        println((if (got == want) "PASS " else "FAIL ") + "recipients '$raw' -> '$got'" + (if (got == want) "" else " (want '$want')"))
+    }
 }
