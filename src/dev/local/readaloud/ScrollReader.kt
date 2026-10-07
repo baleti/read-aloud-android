@@ -93,6 +93,7 @@ object ScrollReader {
             val toSpeak = filter.feed(fresh)
             var text = toSpeak.joinToString("\n") { it.replace(EmailCleaner.HEADER_MARK, "") }.trim()
             if (first && text.isNotBlank() && intro != null) text = "$intro\n$text"
+            Log.i(TAG, "screen $screens: ${lines.size} lines, ${fresh.size} fresh, speaking ${text.length} chars; headers: ${toSpeak.filter { it.startsWith("From: ") || it.startsWith(EmailCleaner.HEADER_MARK) }.joinToString(" | ") { it.replace(EmailCleaner.HEADER_MARK, "").take(60) }}")
             if (fresh.isEmpty()) stagnant++ else stagnant = 0
             if (text.isNotBlank()) {
                 if (first) service.toastReading(label)
