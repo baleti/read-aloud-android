@@ -30,7 +30,10 @@ object GenericProfile : AppProfile {
      * headings such as Wikipedia mobile's collapsed sections, expandable list rows). One per call. */
     override fun expandVisible(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): Boolean {
         val node = AccessibilityTree.findNode(mainScope(root)) { n ->
-            n.isVisibleToUser && n.actionList.any { it.id == AccessibilityNodeInfo.ACTION_EXPAND }
+            // Only section headings (Wikipedia-style collapsible sections): a bare expandable button
+            // can be a menu (account / overflow), and opening menus is never what a read wants.
+            n.isVisibleToUser && n.actionList.any { it.id == AccessibilityNodeInfo.ACTION_EXPAND } &&
+                (n.isHeading || n.parent?.isHeading == true)
         } ?: return false
         if (!node.performAction(AccessibilityNodeInfo.ACTION_EXPAND)) return false
         Thread.sleep(350) // let the expanded content render before the screen is re-read

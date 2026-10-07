@@ -215,7 +215,7 @@ class PlayerActivity : Activity() {
         if (!dragging) {
             val pos = s.getPositionMs(); val dur = duration()
             seekBar.progress = ((pos * 1000) / dur).toInt().coerceIn(0, 1000)
-            posView.text = fmt(pos); durView.text = fmt(dur)
+            posView.text = fmt(pos); durView.text = fmt(dur) + (if (ReadAlongState.streaming) "+" else "")
         }
     }
 

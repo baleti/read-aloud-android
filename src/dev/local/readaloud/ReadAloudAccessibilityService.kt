@@ -68,7 +68,12 @@ class ReadAloudAccessibilityService : AccessibilityService() {
         if (instance === this) instance = null
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Keeps the read-along highlight glued to the text: scrolls, window/app switches and content
+        // changes in the app being read re-position (or clear) it at once. Our own windows are ignored.
+        if (event == null || event.packageName?.toString() == packageName) return
+        ReadOverlay.onScreenEvent(event.eventType)
+    }
     override fun onInterrupt() {}
 
     /** Entry point from TriggerReceiver -- detects the foreground app and

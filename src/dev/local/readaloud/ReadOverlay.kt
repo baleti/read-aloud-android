@@ -79,6 +79,7 @@ object ReadOverlay {
 
     // worker-side state
     @Volatile private var refreshPending = false
+    @Volatile private var eventSeq = 0
     private var lastSentence = ""
     private var lastWordIdx = -2
     private var lastRefreshMs = 0L
@@ -271,7 +272,7 @@ object ReadOverlay {
         if (!dragging) {
             val pos = s.getPositionMs(); val dur = duration()
             seekBar.progress = ((pos * 1000) / dur).toInt().coerceIn(0, 1000)
-            posView.text = fmt(pos); durView.text = fmt(dur)
+            posView.text = fmt(pos); durView.text = fmt(dur) + (if (ReadAlongState.streaming) "+" else "")
         }
     }
 
@@ -327,6 +328,29 @@ object ReadOverlay {
 
     // ---- highlighting ----
 
+    /** From the accessibility service: something changed on screen in the app being read. */
+    fun onScreenEvent(type: Int) {
+        if (controls == null) return
+        val moved = type == android.view.accessibility.AccessibilityEvent.TYPE_VIEW_SCROLLED ||
+            type == android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            type == android.view.accessibility.AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        val changed = moved || type == android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+        if (!changed) return
+        eventSeq++
+        main.post {
+            // A highlight painted at the old position is wrong the moment the content moves: drop it,
+            // then redraw from a fresh tree read once the movement settles.
+            if (moved) highlight?.set(emptyList(), emptyList())
+            main.removeCallbacks(settledRefresh)
+            main.postDelayed(settledRefresh, 120)
+        }
+    }
+
+    private val settledRefresh = Runnable {
+        lastRefreshMs = 0L
+        requestRefresh()
+    }
+
     private fun requestRefresh() {
         if (hidden || refreshPending) return
         val sentence = ReadAlongState.sentence
@@ -337,10 +361,13 @@ object ReadOverlay {
         if (!changed && now - lastRefreshMs < 1000) return
         if (sentence.isBlank()) return
         refreshPending = true
+        val seqAtStart = eventSeq
         worker.post {
             try { refresh(sentence, wordIdx) } catch (e: Throwable) { Log.w(TAG, "refresh failed: ${e.message}") }
             lastSentence = sentence; lastWordIdx = wordIdx; lastRefreshMs = System.currentTimeMillis()
             refreshPending = false
+            // the screen moved while we were reading it: that result is stale, go again
+            if (eventSeq != seqAtStart) main.post(settledRefresh)
         }
     }
 

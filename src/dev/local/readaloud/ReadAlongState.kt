@@ -12,6 +12,8 @@ object ReadAlongState {
     @Volatile var sentence: String = ""
     @Volatile var words: List<WordTiming> = emptyList()
     @Volatile var wordIdx: Int = -1
+    /** A ScrollReader read is still adding content, so the total length shown is only what's known so far. */
+    @Volatile var streaming: Boolean = false
 
     /** Start (ms, service timeline) of each streamed chunk/"section", for skip-section controls. */
     val sections: MutableList<Long> = java.util.Collections.synchronizedList(ArrayList())

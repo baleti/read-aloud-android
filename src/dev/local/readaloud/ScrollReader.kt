@@ -37,6 +37,7 @@ object ScrollReader {
         }
         service.bindService(Intent(service, TtsPlaybackService::class.java), conn, Context.BIND_AUTO_CREATE)
         val filter = profile.newStreamFilter()
+        ReadAlongState.streaming = true
         try {
             loop(service, pkg, profile, filter, label, generation) { tts }
             val tail = filter.finish().joinToString("\n").trim()
@@ -44,6 +45,7 @@ object ScrollReader {
                 TtsSpeaker.speak(service, label, tail, continueSession = true, keepOpen = true)
             }
         } finally {
+            ReadAlongState.streaming = false
             try { TtsSpeaker.finishOpenSession(service) } catch (_: Exception) {}
             try { service.unbindService(conn) } catch (_: Exception) {}
         }
