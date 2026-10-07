@@ -37,6 +37,7 @@ object OverlayIndicator {
     private const val SHOW_DELAY_MS = 1200L
     private const val MIN_VISIBLE_MS = 1500L
     private const val MAX_LINES = 4
+    private const val FLOATING_BANNER_ENABLED = false
     // Watchdog (2026-10-07): the banner once sat on screen for 52 minutes
     // ("Generating speech with Kokoro (3149s)") because the read had ended
     // without any hide() call reaching it. A genuine wait always produces
@@ -138,7 +139,10 @@ object OverlayIndicator {
     }
 
     private fun createView() {
-        if (suppressed) return
+        // The floating banner is retired (2026-10-07, asked for explicitly:
+        // it kept getting stuck on screen with no way to dismiss it). The
+        // status now lives only inside PlayerActivity via statusLine().
+        if (!FLOATING_BANNER_ENABLED || suppressed) return
         val service = ReadAloudAccessibilityService.instance ?: return
         if (view != null) return
         val tv = TextView(service).apply {
