@@ -72,7 +72,7 @@ object AppProfileRegistry {
         RedditProfile,
         OutlookProfile,
         WhatsAppProfile,
-    ).associateBy { it.packageName }
+    ).associateBy { it.packageName } + BrowserProfile.PACKAGES.associateWith { BrowserProfile }
 
     /** Never returns null -- GenericProfile is the fallback for every
      * package without a dedicated entry above, which is the whole point

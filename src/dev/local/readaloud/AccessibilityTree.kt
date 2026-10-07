@@ -89,9 +89,38 @@ object AccessibilityTree {
             val label = resId?.let { labels[it] }
             out.add(if (label != null) "$label: $text" else text)
         }
+        if (labels.isEmpty() && joinInlineRun(node, out)) return
         for (i in 0 until node.childCount) {
             node.getChild(i)?.let { walk(it, labels, excludeIds, out) }
         }
+    }
+
+    /** Web content (browsers, WebView-based apps) exposes each inline span
+     * of one sentence ("This is the " + link + ", reviewed on " + date) as
+     * its own leaf node, which read as separate choppy lines. If every
+     * child of `node` is a plain visible text leaf sitting on the same row,
+     * emit them as ONE line and report true. */
+    private fun joinInlineRun(node: AccessibilityNodeInfo, out: MutableList<String>): Boolean {
+        val n = node.childCount
+        if (n < 2) return false
+        val parts = ArrayList<String>(n)
+        var top = Int.MIN_VALUE
+        var bottom = Int.MAX_VALUE
+        val r = Rect()
+        for (i in 0 until n) {
+            val c = node.getChild(i) ?: return false
+            if (c.childCount > 0 || !c.isVisibleToUser || c.isScrollable || isChrome(c)) return false
+            val t = c.text?.toString() ?: return false
+            if (t.isBlank()) return false
+            c.getBoundsInScreen(r)
+            // same row: each span's vertical extent overlaps the running intersection
+            top = maxOf(top, r.top); bottom = minOf(bottom, r.bottom)
+            if (bottom <= top) return false
+            parts.add(t)
+        }
+        val joined = parts.joinToString("").replace(Regex("\\s+"), " ").trim()
+        if (joined.isNotEmpty()) out.add(joined)
+        return true
     }
 
     // Class names common to icon-only action buttons (a toolbar's Reply/

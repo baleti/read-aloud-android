@@ -13,6 +13,21 @@ import android.text.Html
 object WebArticleExtractor {
     class Result(val title: String, val text: String)
 
+    /** Fetches `url` and extracts it; null on any HTTP/network failure. Throws
+     * nothing - callers fall back to another route when this returns null. */
+    fun fetch(url: String): Result? = try {
+        val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+        conn.setRequestProperty(
+            "User-Agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        )
+        conn.instanceFollowRedirects = true
+        conn.connectTimeout = 10_000
+        conn.readTimeout = 15_000
+        if (conn.responseCode != 200) null
+        else extract(conn.inputStream.bufferedReader().use { it.readText() })
+    } catch (_: Exception) { null }
+
     private val NOISE = Regex(
         """<(script|style|noscript|svg|nav|header|footer|aside|form|template|iframe|button)\b[^>]*>.*?</\1\s*>""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),

@@ -71,23 +71,9 @@ class ShareReadActivity : Activity() {
     }
 
     private fun fetchPageAndSpeak(url: String) {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.setRequestProperty(
-            "User-Agent",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
-        )
-        conn.instanceFollowRedirects = true
-        conn.connectTimeout = 10_000
-        conn.readTimeout = 15_000
-        val code = conn.responseCode
-        if (code != 200) {
-            mainHandler.post { Toast.makeText(applicationContext, "That page returned $code", Toast.LENGTH_LONG).show() }
-            return
-        }
-        val html = conn.inputStream.bufferedReader().use { it.readText() }
-        val page = WebArticleExtractor.extract(html)
-        if (page.text.length < 40) {
-            mainHandler.post { Toast.makeText(applicationContext, "Nothing readable found on that page", Toast.LENGTH_LONG).show() }
+        val page = WebArticleExtractor.fetch(url)
+        if (page == null || page.text.length < 40) {
+            mainHandler.post { Toast.makeText(applicationContext, "Couldn't get readable text from that page", Toast.LENGTH_LONG).show() }
             return
         }
         val text = if (page.title.isNotBlank() && !page.text.startsWith(page.title)) page.title + ".\n\n" + page.text else page.text

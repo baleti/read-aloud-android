@@ -21,5 +21,10 @@ object GenericProfile : AppProfile {
     override val packageName: String = "*generic*" // never registered under this key -- see AppProfileRegistry
 
     override fun extract(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo, mode: String): List<String> =
-        AccessibilityTree.collectText(root)
+        AccessibilityTree.collectText(root).let { lines ->
+            // A tree with almost no text (canvas/game/Compose-without-semantics/
+            // image-only screens): last resort is OCR of the screen itself.
+            if (lines.sumOf { it.length } >= 40) lines
+            else service.ocrScreenshot().lines().map { it.trim() }.filter { it.isNotBlank() }.ifEmpty { lines }
+        }
 }
