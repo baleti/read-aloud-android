@@ -792,8 +792,19 @@ object GmailProfile : AppProfile {
     // collapsed messages as they come into view, scroll, repeat.
     override fun streams(mode: String): Boolean = mode == "this_email"
 
+    private fun debugHeaderNodes(root: AccessibilityNodeInfo) {
+        val hits = AccessibilityTree.findAllNodes2(root) { n ->
+            val id = n.viewIdResourceName?.substringAfterLast('/') ?: return@findAllNodes2 false
+            id in setOf("subject_and_folder_view", "sender_name", "upper_date", "recipient_summary", "upper_header", "email_snippet")
+        }
+        Log.i(TAG, "DEBUG header nodes: " + hits.joinToString(" ; ") { n ->
+            val r = android.graphics.Rect().also { n.getBoundsInScreen(it) }
+            "${n.viewIdResourceName?.substringAfterLast('/')} vis=${n.isVisibleToUser} y=${r.top}-${r.bottom}"
+        })
+    }
+
     override fun screenLines(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String> =
-        AccessibilityTree.collectTextWithLabels(GenericProfile.mainScope(root), STREAM_LABELS).mapNotNull {
+        AccessibilityTree.collectTextWithLabels(GenericProfile.mainScope(root), STREAM_LABELS).also { debugHeaderNodes(root) }.mapNotNull {
             val m = EmailCleaner.HEADER_MARK
             when {
                 it.startsWith("Subject: ") -> m + "Subject: " + stripTrailingLabels(it.removePrefix("Subject: "))
@@ -802,6 +813,34 @@ object GmailProfile : AppProfile {
                 else -> it
             }
         }
+
+    /** Reading started below the header (Gmail opens a thread at its latest message, and you may have scrolled):
+     * announce the subject and the nearest message header ABOVE the screen - sender, date, recipients - read from
+     * nodes that exist in the tree but are scrolled out of view. Nothing is added when a "From:" is on screen. */
+    override fun streamPreamble(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo, visible: List<String>): List<String> {
+        if (visible.any { it.startsWith("From: ") }) return emptyList()
+        val m = EmailCleaner.HEADER_MARK
+        val out = ArrayList<String>()
+        fun idOf(n: AccessibilityNodeInfo) = n.viewIdResourceName?.substringAfterLast('/')
+        val top = android.graphics.Rect().also { GenericProfile.mainScope(root).getBoundsInScreen(it) }.top
+        val all = AccessibilityTree.findAllNodes2(root) { true }
+        all.firstOrNull { idOf(it) == "subject_and_folder_view" }?.text?.toString()?.takeIf { it.isNotBlank() }?.let {
+            out.add(m + "Subject: " + stripTrailingLabels(it))
+        }
+        // the nearest sender_name that sits above the visible area
+        val sender = all.filter { idOf(it) == "sender_name" && !it.text.isNullOrBlank() }
+            .map { it to android.graphics.Rect().also { r -> it.getBoundsInScreen(r) } }
+            .filter { (_, r) -> r.bottom <= top + 4 }
+            .maxByOrNull { (_, r) -> r.bottom } ?: return out
+        out.add("From: " + sender.first.text.toString().trim())
+        var header: AccessibilityNodeInfo? = sender.first
+        while (header != null && idOf(header) != "upper_header") header = header.parent
+        val scope = header?.let { h -> AccessibilityTree.findAllNodes2(h) { true } } ?: emptyList()
+        scope.firstOrNull { idOf(it) == "upper_date" }?.text?.toString()?.takeIf { it.isNotBlank() }?.let { out.add(m + "Date: " + it) }
+        scope.firstOrNull { idOf(it) == "recipient_summary" }?.text?.toString()
+            ?.let { EmailCleaner.summarizeRecipients(it) }?.takeIf { it.isNotBlank() }?.let { out.add(m + "To: " + it) }
+        return out
+    }
 
     override fun expandVisible(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): Boolean {
         val target = AccessibilityTree.findNode(root) { it.viewIdResourceName?.endsWith("super_collapsed_block") == true }

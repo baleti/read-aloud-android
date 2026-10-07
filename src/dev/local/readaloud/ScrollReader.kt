@@ -81,7 +81,8 @@ object ScrollReader {
             while (guard++ < 4 && !service.isSuperseded(generation) && profile.expandVisible(service, root)) {
                 root = service.foregroundRoot()?.second ?: break
             }
-            val lines = profile.screenLines(service, root)
+            var lines = profile.screenLines(service, root)
+            if (first) lines = profile.streamPreamble(service, root, lines) + lines
 
             // Lines already spoken (the overlap between consecutive screens, sticky headers): drop the leading run.
             var drop = 0

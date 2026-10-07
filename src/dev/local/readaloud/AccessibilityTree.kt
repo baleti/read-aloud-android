@@ -249,6 +249,17 @@ object AccessibilityTree {
         return null
     }
 
+    /** Like findAllNodes() but also returns nodes that aren't currently visible (scrolled off). */
+    fun findAllNodes2(root: AccessibilityNodeInfo, predicate: (AccessibilityNodeInfo) -> Boolean): List<AccessibilityNodeInfo> {
+        val out = mutableListOf<AccessibilityNodeInfo>()
+        fun rec(node: AccessibilityNodeInfo) {
+            if (predicate(node)) out.add(node)
+            for (i in 0 until node.childCount) node.getChild(i)?.let { rec(it) }
+        }
+        rec(root)
+        return out
+    }
+
     fun findAllNodes(root: AccessibilityNodeInfo, predicate: (AccessibilityNodeInfo) -> Boolean): List<AccessibilityNodeInfo> {
         val rootBounds = Rect()
         root.getBoundsInScreen(rootBounds)

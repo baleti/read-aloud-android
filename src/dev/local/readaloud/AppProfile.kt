@@ -75,6 +75,10 @@ interface AppProfile {
     fun screenLines(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): List<String> =
         GenericProfile.screenLines(service, root)
 
+    /** Context to speak before the FIRST screenful when reading starts mid-content (a Gmail email scrolled
+     * past its header: subject, sender, date, recipients). `visible` is what the first screen holds. */
+    fun streamPreamble(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo, visible: List<String>): List<String> = emptyList()
+
     /** Expand ONE collapsed thing currently on screen (a collapsed email, "N more replies"...).
      * Returns true if it clicked something, so the caller re-reads the screen. */
     fun expandVisible(service: ReadAloudAccessibilityService, root: AccessibilityNodeInfo): Boolean =
