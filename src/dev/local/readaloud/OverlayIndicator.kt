@@ -37,6 +37,12 @@ object OverlayIndicator {
     private const val SHOW_DELAY_MS = 1200L
     private const val MIN_VISIBLE_MS = 1500L
     private const val MAX_LINES = 4
+    // Watchdog (2026-10-07): the banner once sat on screen for 52 minutes
+    // ("Generating speech with Kokoro (3149s)") because the read had ended
+    // without any hide() call reaching it. A genuine wait always produces
+    // show()/status traffic, so a banner whose last sign of life is older
+    // than this is stale by definition and removes itself.
+    private const val STALE_AFTER_MS = 90_000L
 
     private class Step(val text: String, val atNanos: Long)
 
@@ -45,6 +51,7 @@ object OverlayIndicator {
     private var baseText = ""
     private var waiting = false
     private var visibleSinceNanos = 0L
+    private var lastActivityNanos = 0L
     // Steps of the ONE sentence playback is blocked on (server forwards only
     // that one): all but the last are finished, the last is in progress.
     private val steps = ArrayList<Step>()
@@ -56,6 +63,13 @@ object OverlayIndicator {
     private val tick = object : Runnable {
         override fun run() {
             if (view == null) return
+            if ((System.nanoTime() - lastActivityNanos) / 1_000_000 > STALE_AFTER_MS) {
+                Log.w(TAG, "overlay stale for >${STALE_AFTER_MS / 1000}s, removing")
+                waiting = false
+                steps.clear()
+                removeView()
+                return
+            }
             render()
             mainHandler.postDelayed(this, 500)
         }
@@ -66,6 +80,7 @@ object OverlayIndicator {
      * the recent history when it appears. */
     fun addStatus(message: String, sentenceNo: Int = 0, of: Int = 0) {
         mainHandler.post {
+            lastActivityNanos = System.nanoTime()
             if (sentenceNo != sentence || sentenceNo == 0) steps.clear()
             sentence = sentenceNo
             sentenceCount = of
@@ -93,6 +108,7 @@ object OverlayIndicator {
 
     fun show(text: String) {
         mainHandler.post {
+            lastActivityNanos = System.nanoTime()
             baseText = text
             mainHandler.removeCallbacks(hideRunnable)
             if (view != null) { waiting = true; render(); return@post }
@@ -124,6 +140,7 @@ object OverlayIndicator {
             wm.addView(tv, params)
             view = tv
             visibleSinceNanos = System.nanoTime()
+            lastActivityNanos = visibleSinceNanos
             render()
             mainHandler.postDelayed(tick, 500)
         } catch (e: Throwable) {
@@ -134,6 +151,7 @@ object OverlayIndicator {
     fun hide() {
         mainHandler.post {
             waiting = false
+            steps.clear()
             mainHandler.removeCallbacks(showRunnable)
             if (view == null) return@post
             val visibleMs = (System.nanoTime() - visibleSinceNanos) / 1_000_000

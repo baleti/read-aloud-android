@@ -38,7 +38,7 @@
              instead. NoDisplay theme - it shows a Toast and finishes
              immediately, no visible screen of its own. -->
         <activity
-            android:name=".RedditShareActivity"
+            android:name=".ShareReadActivity"
             android:exported="true"
             android:label="Read Aloud"
             android:theme="@android:style/Theme.NoDisplay">

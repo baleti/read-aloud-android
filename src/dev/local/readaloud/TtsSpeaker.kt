@@ -280,7 +280,7 @@ object TtsSpeaker {
                     "done" -> {
                         // Everything was either enqueued by the server or
                         // already covered by local audio.
-                        active.set(false); svc.endSession(); ws.close()
+                        active.set(false); svc.endSession(); ws.close(); OverlayIndicator.hide()
                     }
                     "error" -> {
                         Log.e(TAG, "server error: ${obj.optString("message")}")
@@ -288,6 +288,7 @@ object TtsSpeaker {
                         active.set(false)
                         svc.endSession()
                         ws.close()
+                        OverlayIndicator.hide()
                     }
                 }
             }
@@ -317,7 +318,7 @@ object TtsSpeaker {
                 active.set(false)
                 OverlayIndicator.hide()
             }
-            override fun onClosed() { active.set(false) }
+            override fun onClosed() { active.set(false); if (!serverTookOver && localSentences.isEmpty()) OverlayIndicator.hide() }
         })
         if (activeWs === ws) activeWs = null
 
