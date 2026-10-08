@@ -86,6 +86,13 @@ class MainActivity : Activity() {
         engineField = EditText(this).apply { hint = "engine (kokoro / chatterbox)"; setText(Settings.getTtsEngine(this@MainActivity)) }
         root.addView(engineField)
 
+        if (ReadAlongState.hasSaved(this)) root.addView(
+            Button(this).apply {
+                text = "Open last document"
+                setOnClickListener { PlayerActivity.launch(this@MainActivity) }
+            },
+        )
+
         root.addView(
             Button(this).apply {
                 text = "Save"

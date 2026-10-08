@@ -164,6 +164,9 @@ object TtsSpeaker {
         // overlay, so nothing in whatever app happens to be open gets highlighted;
         // the player screen shows the text and controls instead.
         highlightScreen: Boolean = true,
+        // Resuming a saved document: the already-read text before the resume point,
+        // kept so the player still shows (and re-persists) the whole document.
+        readAlongPrefix: String = "",
     ) {
         // A new speak() call ALWAYS supersedes whatever was in flight
         // before, on the network side too - see this object's own doc.
@@ -216,6 +219,7 @@ object TtsSpeaker {
                 ReadAlongState.words = words
                 ReadAlongState.wordIdx = -1
                 ReadAlongState.sentence = text
+                ReadAlongState.noteSentence(text)
                 OverlayIndicator.hide()
             }
             override fun onWordHighlight(wordIndex: Int) { ReadAlongState.wordIdx = wordIndex }
@@ -230,7 +234,11 @@ object TtsSpeaker {
         if (continueSession) {
             ReadAlongState.append(text)
         } else {
-            ReadAlongState.begin(text)
+            ReadAlongState.begin(readAlongPrefix + text)
+            if (!highlightScreen) {
+                ReadAlongState.persistNew(context, title)
+                ReadAlongState.offset = readAlongPrefix.length
+            }
             svc.startSession(title)
         }
         ReadAlongState.sections.add(svc.enqueuedEndMs())

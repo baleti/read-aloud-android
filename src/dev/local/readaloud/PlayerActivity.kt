@@ -60,6 +60,8 @@ class PlayerActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private var dragging = false
     private var idleTicks = 0
+    private var everActive = false
+    private var restoredScrolled = false
 
     // Read-along: full text with the current sentence/word highlighted.
     private var shownText: String? = null
@@ -146,7 +148,9 @@ class PlayerActivity : Activity() {
             addView(durView)
         }
 
-        playPause = icon("ic_play", 56) { svc?.let { if (it.isPlaying()) it.pause() else it.resume() } }
+        playPause = icon("ic_play", 56) {
+            svc?.let { if (it.hasActiveSession()) { if (it.isPlaying()) it.pause() else it.resume() } else resumeSaved() }
+        }
         speedBtn = TextView(this).apply {
             text = "1x"; textSize = 16f; setTextColor(Theme.onBackground); gravity = Gravity.CENTER
             minHeight = dp(48); minWidth = dp(48)
@@ -173,6 +177,8 @@ class PlayerActivity : Activity() {
             addView(controls, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
         }
         setContentView(root)
+        // Reopened after the process died / reboot: show the saved document, ready to resume.
+        if (ReadAlongState.restore(this)) titleView.text = ReadAlongState.title.ifBlank { "Read Aloud" }
         bindService(Intent(this, TtsPlaybackService::class.java), connection, Context.BIND_AUTO_CREATE)
     }
 
@@ -183,6 +189,18 @@ class PlayerActivity : Activity() {
         handler.removeCallbacks(tick)
         try { unbindService(connection) } catch (_: Exception) {}
         super.onDestroy()
+    }
+
+    /** No live session: speak the saved document from where it was last left. */
+    private fun resumeSaved() {
+        val full = ReadAlongState.fullText
+        if (full.isBlank()) return
+        val off = ReadAlongState.offset.coerceIn(0, full.length)
+        val title = ReadAlongState.title.ifBlank { "Shared text" }
+        val ctx = applicationContext
+        Thread {
+            TtsSpeaker.speak(ctx, title, full.substring(off), highlightScreen = false, readAlongPrefix = full.substring(0, off))
+        }.apply { isDaemon = true; start() }
     }
 
     private fun duration(): Long = svc?.getDisplayDurationMs()?.coerceAtLeast(1) ?: 1
@@ -200,6 +218,21 @@ class PlayerActivity : Activity() {
     private fun refresh() {
         val s = svc ?: return
         val active = s.hasActiveSession()
+        if (active) everActive = true
+        if (!active && !everActive && ReadAlongState.fullText.isNotEmpty()) {
+            // Viewing a restored document: stay open, show where it was left, play resumes it.
+            setIcon(playPause, "ic_play")
+            updateReadAlong()
+            if (!restoredScrolled) {
+                restoredScrolled = true
+                sentenceView.post {
+                    val layout = sentenceView.layout ?: return@post
+                    val line = layout.getLineForOffset(ReadAlongState.offset.coerceIn(0, ReadAlongState.fullText.length))
+                    scroll.scrollTo(0, (layout.getLineTop(line) - scroll.height / 3).coerceAtLeast(0))
+                }
+            }
+            return
+        }
         if (!active) {
             // Session over (finished or stopped elsewhere): show it, linger a bit, then close.
             setIcon(playPause, "ic_play")
