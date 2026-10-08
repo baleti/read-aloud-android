@@ -121,7 +121,14 @@ class PlayerActivity : Activity() {
         }
         scroll = android.widget.ScrollView(this).apply {
             addView(sentenceView)
-            setOnTouchListener { _, ev -> if (ev.action == MotionEvent.ACTION_DOWN || ev.action == MotionEvent.ACTION_MOVE) lastUserScrollMs = System.currentTimeMillis(); false }
+            val taps = android.view.GestureDetector(this@PlayerActivity, object : android.view.GestureDetector.SimpleOnGestureListener() {
+                override fun onSingleTapUp(e: MotionEvent): Boolean { seekToTap(e.x, e.y); return false }
+            })
+            setOnTouchListener { _, ev ->
+                if (ev.action == MotionEvent.ACTION_DOWN || ev.action == MotionEvent.ACTION_MOVE) lastUserScrollMs = System.currentTimeMillis()
+                taps.onTouchEvent(ev)
+                false
+            }
         }
 
         posView = TextView(this).apply { textSize = 12f; setTextColor(Theme.muted); text = "0:00" }
@@ -189,6 +196,21 @@ class PlayerActivity : Activity() {
         handler.removeCallbacks(tick)
         try { unbindService(connection) } catch (_: Exception) {}
         super.onDestroy()
+    }
+
+    /** Tap on a word in a shared document: restart playback from that word. */
+    private fun seekToTap(x: Float, y: Float) {
+        if (!ReadAlongState.persisting && svc?.hasActiveSession() == true) return // screen reads can't be restarted from text
+        val layout = sentenceView.layout ?: return
+        val full = ReadAlongState.fullText
+        if (full.isBlank()) return
+        val ty = y + scroll.scrollY - sentenceView.top
+        val line = layout.getLineForVertical(ty.toInt())
+        var off = layout.getOffsetForHorizontal(line, x).coerceIn(0, full.length - 1)
+        while (off > 0 && !full[off - 1].isWhitespace()) off--
+        while (off < full.length - 1 && full[off].isWhitespace()) off++
+        ReadAlongState.offset = off
+        resumeSaved()
     }
 
     /** No live session: speak the saved document from where it was last left. */

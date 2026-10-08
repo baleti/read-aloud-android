@@ -29,7 +29,8 @@ object ReadAlongState {
     @Volatile var title: String = ""
     /** Char offset into [fullText] of the sentence last spoken. */
     @Volatile var offset: Int = 0
-    @Volatile private var persisting = false
+    @Volatile var persisting = false
+        private set
     private var appCtx: android.content.Context? = null
     private val prefs get() = appCtx?.getSharedPreferences("readaloud_last_doc", android.content.Context.MODE_PRIVATE)
     private fun docFile() = java.io.File(appCtx!!.filesDir, "last_doc.txt")
