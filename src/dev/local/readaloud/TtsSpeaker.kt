@@ -80,7 +80,13 @@ object TtsSpeaker {
         }
     }
 
+    // The previous speak() call's liveness flag: a new call (skip-ahead, new share) retires it so the
+    // old call's local-TTS thread and any frames still in flight from its server stream stop feeding
+    // the shared playback queue (they used to land right after a tap-to-seek jump).
+    @Volatile private var currentActiveFlag: java.util.concurrent.atomic.AtomicBoolean? = null
+
     private fun closeActiveWs() {
+        currentActiveFlag?.set(false)
         activeWs?.let {
             try { it.close() } catch (_: Exception) {}
         }
@@ -263,6 +269,7 @@ object TtsSpeaker {
         svc.setEstimatedDuration(if (jumpToOffset >= 0) jumpEstimateMs + chunkEstimateMs else if (continueSession) svc.getDisplayDurationMs() + chunkEstimateMs else chunkEstimateMs)
 
         val active = java.util.concurrent.atomic.AtomicBoolean(true)
+        currentActiveFlag = active
         val ws = WebSocketClient(
             Settings.getHost(context),
             Settings.getTtsPort(context),
@@ -348,6 +355,7 @@ object TtsSpeaker {
             }
 
             override fun onText(msg: String) {
+                if (!active.get()) return
                 val obj = JSONObject(msg)
                 when (obj.optString("type")) {
                     "sentence" -> pendingMeta = obj
@@ -369,6 +377,7 @@ object TtsSpeaker {
             }
 
             override fun onBinary(data: ByteArray) {
+                if (!active.get()) return
                 val meta = pendingMeta ?: return
                 val words = mutableListOf<WordTiming>()
                 meta.optJSONArray("words")?.let { arr ->
