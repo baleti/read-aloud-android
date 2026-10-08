@@ -35,4 +35,10 @@ object Theme {
 
     fun rippleOn(base: GradientDrawable): RippleDrawable =
         RippleDrawable(android.content.res.ColorStateList.valueOf(outline and 0x66FFFFFF.toInt()), base, base)
+
+    fun stylePrimaryButton(view: android.view.View, context: Context) {
+        view.background = rippleOn(roundedDrawable(primary, context))
+        val pad = dp(context, 12)
+        view.setPadding(pad, dp(context, 10), pad, dp(context, 10))
+    }
 }

@@ -86,6 +86,8 @@ class PlayerActivity : Activity() {
     private lateinit var scroll: android.widget.ScrollView
     private lateinit var statusView: TextView
     private lateinit var resumeBtn: android.widget.Button
+    private lateinit var resumePreview: TextView
+    private lateinit var resumeBox: LinearLayout
     private lateinit var seekBar: SeekBar
     private lateinit var posView: TextView
     private lateinit var durView: TextView
@@ -124,9 +126,23 @@ class PlayerActivity : Activity() {
         statusView = TextView(this).apply {
             textSize = 12f; setTextColor(Theme.primary); gravity = Gravity.CENTER; visibility = View.GONE
         }
+        // Same look as the News Digest app's Resume: a compact primary button with an
+        // italic "Resumes at" preview underneath.
         resumeBtn = android.widget.Button(this).apply {
-            isAllCaps = false; visibility = View.GONE
+            text = "Resume"; isAllCaps = false
+            setTextColor(Theme.onPrimary)
+            Theme.stylePrimaryButton(this, this@PlayerActivity)
             setOnClickListener { resumeSaved() }
+        }
+        resumePreview = TextView(this).apply {
+            textSize = 12f; setTypeface(null, android.graphics.Typeface.ITALIC)
+            setTextColor(Theme.muted); maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        resumeBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; visibility = View.GONE
+            addView(resumeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+            addView(resumePreview, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = Theme.dp(this@PlayerActivity, 6) })
         }
         scroll = android.widget.ScrollView(this).apply {
             addView(sentenceView)
@@ -191,7 +207,7 @@ class PlayerActivity : Activity() {
             setPadding(dp(24), dp(48), dp(24), dp(32))
             addView(titleView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(statusView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
-            addView(resumeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
+            addView(resumeBox, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
             addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(24); bottomMargin = dp(24) })
             addView(scrubber, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(controls, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
@@ -280,10 +296,11 @@ class PlayerActivity : Activity() {
     private fun updateResumeButton(idle: Boolean) {
         val full = ReadAlongState.fullText
         val off = ReadAlongState.offset.coerceIn(0, full.length)
-        if (!idle || full.isBlank() || off >= full.length) { resumeBtn.visibility = View.GONE; return }
+        if (!idle || full.isBlank() || off >= full.length) { resumeBox.visibility = View.GONE; return }
         val snippet = full.substring(off, (off + 50).coerceAtMost(full.length)).replace(Regex("\\s+"), " ").trim()
-        resumeBtn.text = if (off == 0) "Play from start" else "Resume: “$snippet…”"
-        resumeBtn.visibility = View.VISIBLE
+        resumeBtn.text = if (off == 0) "Play" else "Resume"
+        resumePreview.text = if (off == 0) "Starts from the beginning" else "Resumes at: “$snippet…”"
+        resumeBox.visibility = View.VISIBLE
     }
 
     /** No live session: speak the saved document from where it was last left. */
