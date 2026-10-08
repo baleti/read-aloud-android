@@ -160,6 +160,10 @@ object TtsSpeaker {
         // can follow (the reader calls finishOpenSession() at the very end).
         continueSession: Boolean = false,
         keepOpen: Boolean = false,
+        // false for text that isn't on screen (shared files/links): no floating
+        // overlay, so nothing in whatever app happens to be open gets highlighted;
+        // the player screen shows the text and controls instead.
+        highlightScreen: Boolean = true,
     ) {
         // A new speak() call ALWAYS supersedes whatever was in flight
         // before, on the network side too - see this object's own doc.
@@ -232,7 +236,8 @@ object TtsSpeaker {
         ReadAlongState.sections.add(svc.enqueuedEndMs())
         if (!continueSession) {
             val a11y = ReadAloudAccessibilityService.instance
-            if (a11y != null) ReadOverlay.show(a11y) else PlayerActivity.launch(context.applicationContext)
+            if (!highlightScreen) { ReadOverlay.hide(); PlayerActivity.launch(context.applicationContext) }
+            else if (a11y != null) ReadOverlay.show(a11y) else PlayerActivity.launch(context.applicationContext)
         }
         val wordCount = text.split(Regex("\\s+")).count { it.isNotBlank() }
         val chunkEstimateMs = (wordCount / (160.0 / 60.0) * 1000).toLong()

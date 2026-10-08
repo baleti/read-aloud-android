@@ -73,7 +73,7 @@ class ShareReadActivity : Activity() {
                 when {
                     redditUrl != null -> fetchAndSpeak(redditUrl)
                     anyUrl != null -> fetchPageAndSpeak(anyUrl)
-                    else -> TtsSpeaker.speak(applicationContext, subject ?: "Shared text", sharedText)
+                    else -> TtsSpeaker.speak(applicationContext, subject ?: "Shared text", sharedText, highlightScreen = false)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "failed to fetch/read", e)
@@ -93,7 +93,7 @@ class ShareReadActivity : Activity() {
             return
         }
         val text = if (page.title.isNotBlank() && !page.text.startsWith(page.title)) page.title + ".\n\n" + page.text else page.text
-        TtsSpeaker.speak(applicationContext, page.title.ifBlank { url }, text)
+        TtsSpeaker.speak(applicationContext, page.title.ifBlank { url }, text, highlightScreen = false)
     }
 
     private fun fetchAndSpeak(rawUrl: String) {
@@ -117,6 +117,6 @@ class ShareReadActivity : Activity() {
             mainHandler.post { Toast.makeText(applicationContext, "Nothing readable in that thread's feed", Toast.LENGTH_LONG).show() }
             return
         }
-        TtsSpeaker.speak(applicationContext, "Reddit thread", text)
+        TtsSpeaker.speak(applicationContext, "Reddit thread", text, highlightScreen = false)
     }
 }
