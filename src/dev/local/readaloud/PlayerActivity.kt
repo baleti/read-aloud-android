@@ -85,6 +85,7 @@ class PlayerActivity : Activity() {
     private lateinit var sentenceView: TextView
     private lateinit var scroll: android.widget.ScrollView
     private lateinit var statusView: TextView
+    private lateinit var resumeBtn: android.widget.Button
     private lateinit var seekBar: SeekBar
     private lateinit var posView: TextView
     private lateinit var durView: TextView
@@ -122,6 +123,10 @@ class PlayerActivity : Activity() {
         }
         statusView = TextView(this).apply {
             textSize = 12f; setTextColor(Theme.primary); gravity = Gravity.CENTER; visibility = View.GONE
+        }
+        resumeBtn = android.widget.Button(this).apply {
+            isAllCaps = false; visibility = View.GONE
+            setOnClickListener { resumeSaved() }
         }
         scroll = android.widget.ScrollView(this).apply {
             addView(sentenceView)
@@ -186,6 +191,7 @@ class PlayerActivity : Activity() {
             setPadding(dp(24), dp(48), dp(24), dp(32))
             addView(titleView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(statusView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+            addView(resumeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
             addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(24); bottomMargin = dp(24) })
             addView(scrubber, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(controls, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
@@ -270,6 +276,16 @@ class PlayerActivity : Activity() {
         cursorNorm = 0
     }
 
+    /** "Resume" with a preview of where it will pick up, shown only while nothing is playing. */
+    private fun updateResumeButton(idle: Boolean) {
+        val full = ReadAlongState.fullText
+        val off = ReadAlongState.offset.coerceIn(0, full.length)
+        if (!idle || full.isBlank() || off >= full.length) { resumeBtn.visibility = View.GONE; return }
+        val snippet = full.substring(off, (off + 50).coerceAtMost(full.length)).replace(Regex("\\s+"), " ").trim()
+        resumeBtn.text = if (off == 0) "Play from start" else "Resume: “$snippet…”"
+        resumeBtn.visibility = View.VISIBLE
+    }
+
     /** No live session: speak the saved document from where it was last left. */
     private fun resumeSaved() {
         val full = ReadAlongState.fullText
@@ -298,6 +314,7 @@ class PlayerActivity : Activity() {
         val s = svc ?: return
         val active = s.hasActiveSession()
         if (active) everActive = true
+        updateResumeButton(!active)
         if (!active && !everActive && ReadAlongState.fullText.isNotEmpty()) {
             // Viewing a restored document: stay open, show where it was left, play resumes it.
             setIcon(playPause, "ic_play")
