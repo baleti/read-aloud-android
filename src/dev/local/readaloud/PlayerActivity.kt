@@ -61,6 +61,7 @@ class PlayerActivity : Activity() {
     private var dragging = false
     private var idleTicks = 0
     private var everActive = false
+    private var seekBusyUntilMs = 0L
     private var restoredScrolled = false
 
     // Read-along: full text with the current sentence/word highlighted.
@@ -200,6 +201,8 @@ class PlayerActivity : Activity() {
 
     /** Tap on a word in a shared document: restart playback from that word. */
     private fun seekToTap(x: Float, y: Float) {
+        // A restart takes a few seconds to produce audio; ignore taps meanwhile instead of stacking restarts.
+        if (System.currentTimeMillis() < seekBusyUntilMs) return
         if (!ReadAlongState.persisting && svc?.hasActiveSession() == true) return // screen reads can't be restarted from text
         val layout = sentenceView.layout ?: return
         val full = ReadAlongState.fullText
@@ -210,6 +213,8 @@ class PlayerActivity : Activity() {
         while (off > 0 && !full[off - 1].isWhitespace()) off--
         while (off < full.length - 1 && full[off].isWhitespace()) off++
         ReadAlongState.offset = off
+        seekBusyUntilMs = System.currentTimeMillis() + 4000
+        android.widget.Toast.makeText(this, "Seeking…", android.widget.Toast.LENGTH_SHORT).show()
         resumeSaved()
     }
 

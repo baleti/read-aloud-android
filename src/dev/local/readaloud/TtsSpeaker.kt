@@ -289,6 +289,12 @@ object TtsSpeaker {
         val feedLock = Any()
         var serverTookOver = false
         var localEnd = 0
+        // The accessibility service warms this at connect, but a share into a fresh process
+        // (or a tap-to-seek restart) may get here first: start it now and give it a moment, so
+        // the fast on-device voice covers the wait for the server's first sentence.
+        warmUp(context)
+        var localWaitMs = 0
+        while (localTts?.isReady() != true && localWaitMs < 2000) { Thread.sleep(50); localWaitMs += 50 }
         val local = localTts?.takeIf { it.isReady() }
         val localSentences = if (local != null) splitLocalSentences(text) else emptyList()
         val wsOffset = localSentences.firstOrNull()?.last?.plus(1) ?: 0
