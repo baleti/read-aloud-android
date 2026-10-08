@@ -62,6 +62,9 @@ class PlayerActivity : Activity() {
     private var idleTicks = 0
     private var everActive = false
     private var seekBusyUntilMs = 0L
+    private var downX = 0f
+    private var downContentY = 0f
+    private val pendingSpan = BackgroundColorSpan(0xFF4A3A30.toInt())
     private var restoredScrolled = false
 
     // Read-along: full text with the current sentence/word highlighted.
@@ -123,10 +126,13 @@ class PlayerActivity : Activity() {
         scroll = android.widget.ScrollView(this).apply {
             addView(sentenceView)
             val taps = android.view.GestureDetector(this@PlayerActivity, object : android.view.GestureDetector.SimpleOnGestureListener() {
-                override fun onSingleTapUp(e: MotionEvent): Boolean { seekToTap(e.x, e.y); return false }
+                override fun onSingleTapUp(e: MotionEvent): Boolean { seekToTap(downX, downContentY); return false }
             })
             setOnTouchListener { _, ev ->
                 if (ev.action == MotionEvent.ACTION_DOWN || ev.action == MotionEvent.ACTION_MOVE) lastUserScrollMs = System.currentTimeMillis()
+                // Remember where the finger LANDED in content coordinates: the auto-scroll can move
+                // the text between touch-down and release, which made taps hit the wrong sentence.
+                if (ev.action == MotionEvent.ACTION_DOWN) { downX = ev.x; downContentY = ev.y + scrollY - sentenceView.top }
                 taps.onTouchEvent(ev)
                 false
             }
@@ -207,11 +213,11 @@ class PlayerActivity : Activity() {
         val layout = sentenceView.layout ?: return
         val full = ReadAlongState.fullText
         if (full.isBlank()) return
-        val ty = y + scroll.scrollY - sentenceView.top
-        val line = layout.getLineForVertical(ty.toInt())
+        val line = layout.getLineForVertical(y.toInt())
         var off = layout.getOffsetForHorizontal(line, x).coerceIn(0, full.length - 1)
         while (off > 0 && !full[off - 1].isWhitespace()) off--
         while (off < full.length - 1 && full[off].isWhitespace()) off++
+        showPendingHighlight(off)
         val live = svc?.takeIf { it.hasActiveSession() }
         if (live != null) {
             // Word already has audio: seek straight to it.
@@ -231,6 +237,21 @@ class PlayerActivity : Activity() {
         seekBusyUntilMs = System.currentTimeMillis() + 4000
         android.widget.Toast.makeText(this, "Seeking…", android.widget.Toast.LENGTH_SHORT).show()
         resumeSaved()
+    }
+
+    /** Highlight the tapped sentence at once (before audio starts); the real sentence highlight replaces it. */
+    private fun showPendingHighlight(off: Int) {
+        val sp = spannable ?: return
+        val full = ReadAlongState.fullText
+        var end = off
+        while (end < full.length && full[end] !in ".!?\n") end++
+        end = (end + 1).coerceAtMost(full.length)
+        for (span in sentenceSpans) sp.removeSpan(span)
+        for (span in wordSpans) sp.removeSpan(span)
+        sentStart = -1; sentEnd = -1; shownSentence = "\u0000pending"
+        sp.removeSpan(pendingSpan)
+        sp.setSpan(pendingSpan, off, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        cursorNorm = 0
     }
 
     /** No live session: speak the saved document from where it was last left. */
@@ -323,6 +344,7 @@ class PlayerActivity : Activity() {
         val sentence = ReadAlongState.sentence
         if (sentence != shownSentence) {
             shownSentence = sentence; shownWordIdx = -2
+            sp.removeSpan(pendingSpan)
             for (span in sentenceSpans) sp.removeSpan(span)
             for (span in wordSpans) sp.removeSpan(span)
             sentStart = -1; sentEnd = -1

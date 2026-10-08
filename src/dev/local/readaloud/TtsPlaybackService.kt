@@ -451,7 +451,10 @@ class TtsPlaybackService : Service() {
         var newPosMs = 0L
         synchronized(lock) {
             if (allSentences.isEmpty()) return
-            var remaining = targetMs.coerceAtLeast(0)
+            // targetMs is on the displayed timeline, which after a skip-ahead starts at positionBaseMs
+            // (see jumpToUpcoming); the buffer itself starts at 0.
+            newPosMs = positionBaseMs
+            var remaining = (targetMs - positionBaseMs).coerceAtLeast(0)
             var idx = 0
             while (idx < allSentences.size - 1 && remaining >= allSentences[idx].durationMs) {
                 remaining -= allSentences[idx].durationMs
