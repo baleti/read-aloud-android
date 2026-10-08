@@ -83,7 +83,7 @@ class PlayerActivity : Activity() {
 
     private lateinit var titleView: TextView
     private lateinit var sentenceView: TextView
-    private lateinit var scroll: android.widget.ScrollView
+    private lateinit var scroll: ScrollerScrollView
     private lateinit var statusView: TextView
     private lateinit var resumeBtn: android.widget.Button
     private lateinit var resumePreview: TextView
@@ -122,6 +122,7 @@ class PlayerActivity : Activity() {
         sentenceView = TextView(this).apply {
             textSize = 17f; setTextColor(Theme.muted); gravity = Gravity.START
             setLineSpacing(0f, 1.25f)
+            setPadding(0, 0, dp(24), 0) // keeps text off the thumb now that the scroller reaches the screen edge
         }
         statusView = TextView(this).apply {
             textSize = 12f; setTextColor(Theme.primary); gravity = Gravity.CENTER; visibility = View.GONE
@@ -144,7 +145,7 @@ class PlayerActivity : Activity() {
             addView(resumeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(resumePreview, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = Theme.dp(this@PlayerActivity, 6) })
         }
-        scroll = android.widget.ScrollView(this).apply {
+        scroll = ScrollerScrollView(this).apply {
             addView(sentenceView)
             val taps = android.view.GestureDetector(this@PlayerActivity, object : android.view.GestureDetector.SimpleOnGestureListener() {
                 override fun onSingleTapUp(e: MotionEvent): Boolean { seekToTap(downX, downContentY); return false }
@@ -198,6 +199,7 @@ class PlayerActivity : Activity() {
             addView(icon("ic_rewind", 40) { seekBy(-SKIP_MS) }, w())
             addView(playPause, w())
             addView(icon("ic_forward", 40) { seekBy(SKIP_MS) }, w())
+            addView(icon("ic_locate", 28) { scrollToCurrent() }, w())
             addView(icon("ic_stop", 32) { stopAndClose() }, w())
         }
 
@@ -208,7 +210,7 @@ class PlayerActivity : Activity() {
             addView(titleView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(statusView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
             addView(resumeBox, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
-            addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(24); bottomMargin = dp(24) })
+            addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(24); bottomMargin = dp(24); marginEnd = -dp(24) })
             addView(scrubber, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(controls, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
         }
@@ -436,6 +438,17 @@ class PlayerActivity : Activity() {
                     for (span in wordSpans) sp.setSpan(span, sentStart + r.first, sentStart + r.last + 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
             }
+        }
+    }
+
+    /** Locate button: bring the spoken (or, when idle, resume) position into view and let auto-follow take over again. */
+    private fun scrollToCurrent() {
+        lastUserScrollMs = 0
+        val at = if (sentStart >= 0) sentStart else ReadAlongState.offset
+        sentenceView.post {
+            val layout = sentenceView.layout ?: return@post
+            val line = layout.getLineForOffset(at.coerceIn(0, ReadAlongState.fullText.length))
+            scroll.smoothScrollTo(0, (layout.getLineTop(line) - scroll.height / 3).coerceAtLeast(0))
         }
     }
 
