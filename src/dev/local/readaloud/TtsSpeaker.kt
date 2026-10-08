@@ -167,6 +167,11 @@ object TtsSpeaker {
         // Resuming a saved document: the already-read text before the resume point,
         // kept so the player still shows (and re-persists) the whole document.
         readAlongPrefix: String = "",
+        // Skip-ahead inside an existing document (tap a word with no audio yet): the same
+        // session keeps going from a new text position, like the News Digest app's skipAheadTo.
+        // Implies continueSession; the shown document text is left alone.
+        jumpToOffset: Int = -1,
+        jumpEstimateMs: Long = 0L,
     ) {
         // A new speak() call ALWAYS supersedes whatever was in flight
         // before, on the network side too - see this object's own doc.
@@ -219,7 +224,7 @@ object TtsSpeaker {
                 ReadAlongState.words = words
                 ReadAlongState.wordIdx = -1
                 ReadAlongState.sentence = text
-                ReadAlongState.noteSentence(text)
+                ReadAlongState.noteSentence(text, words, startMs)
                 OverlayIndicator.hide()
             }
             override fun onWordHighlight(wordIndex: Int) { ReadAlongState.wordIdx = wordIndex }
@@ -231,7 +236,12 @@ object TtsSpeaker {
             }
         })
 
-        if (continueSession) {
+        if (jumpToOffset >= 0) {
+            svc.jumpToUpcoming(jumpEstimateMs)
+            ReadAlongState.sessionBase = jumpToOffset
+            ReadAlongState.resetKnownWords(jumpToOffset)
+            ReadAlongState.offset = jumpToOffset
+        } else if (continueSession) {
             ReadAlongState.append(text)
         } else {
             ReadAlongState.begin(readAlongPrefix + text)
@@ -243,14 +253,14 @@ object TtsSpeaker {
             svc.startSession(title)
         }
         ReadAlongState.sections.add(svc.enqueuedEndMs())
-        if (!continueSession) {
+        if (!continueSession && jumpToOffset < 0) {
             val a11y = ReadAloudAccessibilityService.instance
             if (!highlightScreen) { ReadOverlay.hide(); PlayerActivity.launch(context.applicationContext) }
             else if (a11y != null) ReadOverlay.show(a11y) else PlayerActivity.launch(context.applicationContext)
         }
         val wordCount = text.split(Regex("\\s+")).count { it.isNotBlank() }
         val chunkEstimateMs = (wordCount / (160.0 / 60.0) * 1000).toLong()
-        svc.setEstimatedDuration(if (continueSession) svc.getDisplayDurationMs() + chunkEstimateMs else chunkEstimateMs)
+        svc.setEstimatedDuration(if (jumpToOffset >= 0) jumpEstimateMs + chunkEstimateMs else if (continueSession) svc.getDisplayDurationMs() + chunkEstimateMs else chunkEstimateMs)
 
         val active = java.util.concurrent.atomic.AtomicBoolean(true)
         val ws = WebSocketClient(

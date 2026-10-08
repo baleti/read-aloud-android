@@ -76,17 +76,43 @@ object ReadAlongState {
     fun hasSaved(ctx: android.content.Context): Boolean =
         java.io.File(ctx.applicationContext.filesDir, "last_doc.txt").let { it.exists() && it.length() > 0 }
 
-    /** Track the spoken sentence's position so playback can resume there. */
-    fun noteSentence(s: String) {
-        if (!persisting) return
-        val needle = s.trim().split(Regex("\\s+")).take(8).filter { it.isNotEmpty() }
-        if (needle.isEmpty()) return
+    /** A word of the document that has audio: char range in [fullText] and its start (ms, seekTo timeline). */
+    class KnownWord(val charStart: Int, val charEnd: Int, val ms: Long)
+    val knownWords: MutableList<KnownWord> = java.util.Collections.synchronizedList(ArrayList())
+    private var sentenceCursor = 0
+
+    fun resetKnownWords(from: Int) { knownWords.clear(); sentenceCursor = from }
+
+    /**
+     * A sentence started playing: locate it in [fullText], record each word's char range and
+     * start time (the tap-to-seek table, same idea as the News Digest app's knownWords), and,
+     * for saved documents, remember where we are for resume.
+     */
+    fun noteSentence(sentence: String, words: List<WordTiming>, startMs: Long) {
         val full = fullText
-        // whitespace-tolerant search from the last known offset
-        val re = Regex(needle.joinToString("\\s+") { Regex.escape(it) })
-        val m = re.find(full, offset.coerceAtMost(full.length)) ?: re.find(full) ?: return
-        offset = m.range.first
-        prefs?.edit()?.putInt("offset", offset)?.apply()
+        val tokens = sentence.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return
+        val from = sentenceCursor.coerceIn(0, full.length)
+        var at = full.indexOf(sentence, from)
+        if (at < 0) {
+            val re = Regex(tokens.take(8).joinToString("\\s+") { Regex.escape(it) })
+            at = (re.find(full, from) ?: re.find(full))?.range?.first ?: return
+        }
+        sentenceCursor = at + 1
+        val limit = (at + sentence.length + 16).coerceAtMost(full.length)
+        var pos = at
+        for (w in words) {
+            val word = w.word.trim()
+            if (word.isEmpty()) continue
+            val i = full.indexOf(word, pos)
+            if (i < 0 || i + word.length > limit) continue
+            knownWords.add(KnownWord(i, i + word.length, startMs + w.startMs))
+            pos = i + word.length
+        }
+        if (persisting) {
+            offset = at
+            prefs?.edit()?.putInt("offset", at)?.apply()
+        }
     }
 
     fun begin(text: String) {
@@ -97,5 +123,6 @@ object ReadAlongState {
         wordIdx = -1
         persisting = false
         sessionBase = 0
+        resetKnownWords(0)
     }
 }
