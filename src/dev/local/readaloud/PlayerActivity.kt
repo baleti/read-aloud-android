@@ -212,10 +212,36 @@ class PlayerActivity : Activity() {
         var off = layout.getOffsetForHorizontal(line, x).coerceIn(0, full.length - 1)
         while (off > 0 && !full[off - 1].isWhitespace()) off--
         while (off < full.length - 1 && full[off].isWhitespace()) off++
+        // Already synthesized? Then just jump inside the buffered audio - instant, no regeneration.
+        svc?.takeIf { it.hasActiveSession() }?.let { s ->
+            val ms = bufferedStartMsFor(s, off)
+            if (ms != null) { s.seekTo(ms); s.resume(); return }
+        }
         ReadAlongState.offset = off
         seekBusyUntilMs = System.currentTimeMillis() + 4000
         android.widget.Toast.makeText(this, "Seeking…", android.widget.Toast.LENGTH_SHORT).show()
         resumeSaved()
+    }
+
+    /** Start (ms) of the buffered sentence containing char [off], or null if [off] is beyond what's buffered. */
+    private fun bufferedStartMsFor(s: TtsPlaybackService, off: Int): Long? {
+        val sentences = s.bufferedSentences()
+        if (sentences.isEmpty()) return null
+        val full = ReadAlongState.fullText
+        var cursor = ReadAlongState.sessionBase.coerceIn(0, full.length)
+        var best: Long? = null
+        for ((text, startMs) in sentences) {
+            val words = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.take(6)
+            if (words.isEmpty()) continue
+            val m = Regex(words.joinToString("\\s+") { Regex.escape(it) }).find(full, cursor) ?: continue
+            if (m.range.first > off) return best
+            best = startMs
+            cursor = m.range.first + 1
+            // end of this sentence's text: if off is past it, keep looking (a later sentence may contain off)
+        }
+        // off lies after the last buffered sentence's start: only inside it if close to its length
+        val lastLen = sentences.last().first.length
+        return if (off < cursor - 1 + lastLen) best else null
     }
 
     /** No live session: speak the saved document from where it was last left. */

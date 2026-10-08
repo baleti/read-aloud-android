@@ -235,6 +235,7 @@ object TtsSpeaker {
             ReadAlongState.append(text)
         } else {
             ReadAlongState.begin(readAlongPrefix + text)
+            ReadAlongState.sessionBase = readAlongPrefix.length
             if (!highlightScreen) {
                 ReadAlongState.persistNew(context, title)
                 ReadAlongState.offset = readAlongPrefix.length

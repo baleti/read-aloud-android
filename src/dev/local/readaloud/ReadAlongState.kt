@@ -27,6 +27,8 @@ object ReadAlongState {
     // --- Last-document persistence (2026-10-08): the in-memory text above dies with the
     // process, so a shared document is mirrored to disk and its spoken position to prefs.
     @Volatile var title: String = ""
+    /** Char offset in [fullText] where the current audio session's first sentence starts. */
+    @Volatile var sessionBase: Int = 0
     /** Char offset into [fullText] of the sentence last spoken. */
     @Volatile var offset: Int = 0
     @Volatile var persisting = false
@@ -94,5 +96,6 @@ object ReadAlongState {
         words = emptyList()
         wordIdx = -1
         persisting = false
+        sessionBase = 0
     }
 }

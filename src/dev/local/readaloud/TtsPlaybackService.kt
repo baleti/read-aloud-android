@@ -441,6 +441,12 @@ class TtsPlaybackService : Service() {
     /** Jumps to an absolute position (ms) across all sentences synthesized
      * so far for this session. Clamps into range - can't seek into audio
      * that hasn't streamed in yet, or before the start. */
+    /** Text and start (ms, same timeline seekTo uses) of every sentence synthesized so far. */
+    fun bufferedSentences(): List<Pair<String, Long>> = synchronized(lock) {
+        var t = 0L
+        allSentences.map { val r = it.text to t; t += it.durationMs; r }
+    }
+
     fun seekTo(targetMs: Long) {
         var newPosMs = 0L
         synchronized(lock) {
