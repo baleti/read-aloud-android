@@ -217,26 +217,42 @@ class PlayerActivity : Activity() {
         var off = layout.getOffsetForHorizontal(line, x).coerceIn(0, full.length - 1)
         while (off > 0 && !full[off - 1].isWhitespace()) off--
         while (off < full.length - 1 && full[off].isWhitespace()) off++
-        showPendingHighlight(off)
+        // Start from the beginning of the tapped SENTENCE (what the user sees highlighted and
+        // expects spoken), not mid-sentence at the exact word.
+        val sOff = sentenceStart(full, off)
+        showPendingHighlight(sOff)
         val live = svc?.takeIf { it.hasActiveSession() }
         if (live != null) {
             // Word already has audio: seek straight to it.
             val hit = synchronized(ReadAlongState.knownWords) { ReadAlongState.knownWords.find { off in it.charStart until it.charEnd } }
             if (hit != null) { live.seekTo(hit.ms); live.resume(); return }
             // Not synthesized yet: skip ahead inside the same session (fast local voice bridges the wait).
-            val estMs = (off.toDouble() / full.length * live.getDisplayDurationMs()).toLong()
+            val estMs = (sOff.toDouble() / full.length * live.getDisplayDurationMs()).toLong()
             seekBusyUntilMs = System.currentTimeMillis() + 2500
             val title = ReadAlongState.title.ifBlank { "Shared text" }
             val ctx = applicationContext
             Thread {
-                TtsSpeaker.speak(ctx, title, full.substring(off), continueSession = true, highlightScreen = false, jumpToOffset = off, jumpEstimateMs = estMs)
+                TtsSpeaker.speak(ctx, title, full.substring(sOff), continueSession = true, highlightScreen = false, jumpToOffset = sOff, jumpEstimateMs = estMs)
             }.apply { isDaemon = true; start() }
             return
         }
-        ReadAlongState.offset = off
+        ReadAlongState.offset = sOff
         seekBusyUntilMs = System.currentTimeMillis() + 4000
         android.widget.Toast.makeText(this, "Seeking…", android.widget.Toast.LENGTH_SHORT).show()
         resumeSaved()
+    }
+
+    /** Start of the sentence containing [off]: just after the previous . ! ? (+space) or paragraph break. */
+    private fun sentenceStart(full: String, off: Int): Int {
+        var i = off
+        while (i > 0) {
+            val c = full[i - 1]
+            if (c == '\n') break
+            if (c.isWhitespace() && i >= 2 && full[i - 2] in ".!?") break
+            i--
+        }
+        while (i < off && full[i].isWhitespace()) i++
+        return i
     }
 
     /** Highlight the tapped sentence at once (before audio starts); the real sentence highlight replaces it. */

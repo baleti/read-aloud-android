@@ -243,6 +243,7 @@ object TtsSpeaker {
         })
 
         if (jumpToOffset >= 0) {
+            Log.i(TAG, "JUMP off=$jumpToOffset est=$jumpEstimateMs text=[${text.take(50).replace('\n', ' ')}]")
             svc.jumpToUpcoming(jumpEstimateMs)
             ReadAlongState.sessionBase = jumpToOffset
             ReadAlongState.resetKnownWords(jumpToOffset)
@@ -317,26 +318,37 @@ object TtsSpeaker {
         val localSentences = if (local != null) splitLocalSentences(text) else emptyList()
         val wsOffset = localSentences.firstOrNull()?.last?.plus(1) ?: 0
         var serverCursor = wsOffset
+        // The server is asked to start AFTER local's first sentence, so if local fails to produce that
+        // sentence (synthesize() returned null) it would never be spoken at all - the "reads the next
+        // sentence" bug. The request therefore waits for local's first-sentence outcome and asks for the
+        // full text when it failed.
+        val firstLocalDone = java.util.concurrent.CountDownLatch(if (localSentences.isNotEmpty()) 1 else 0)
+        val firstLocalOkFlag = java.util.concurrent.atomic.AtomicBoolean(false)
 
         if (local != null && localSentences.isNotEmpty()) {
             Thread {
+              try {
                 for ((i, range) in localSentences.withIndex()) {
                     if (!active.get() || serverTookOver) return@Thread
                     while (i > 0 && active.get() && !serverTookOver && svc.bufferedAheadMs() > 700) Thread.sleep(100)
                     if (!active.get() || serverTookOver) return@Thread
                     val sentence = text.substring(range)
-                    val audio = local.synthesize(speakableForLocalTts(sentence)) ?: return@Thread
+                    val audio = local.synthesize(speakableForLocalTts(sentence))
+                    if (audio == null) { Log.w(TAG, "local synth failed for sentence $i"); firstLocalDone.countDown(); return@Thread }
                     synchronized(feedLock) {
                         if (!active.get() || serverTookOver) return@Thread
                         val ms = audio.pcm.size / 2 * 1000.0 / audio.sampleRate
+                        Log.i(TAG, "ENQ local [${sentence.take(40).replace('\n', ' ')}]")
                         svc.enqueueSentence(sentence, estimateWordTimings(sentence, ms), audio.pcm, audio.sampleRate)
                         localEnd = range.last + 1
+                        if (i == 0) { firstLocalOkFlag.set(true); firstLocalDone.countDown() }
                     }
                 }
                 // Local covered everything (server dead or hopelessly slow):
                 // end the session ourselves and release the blocking connect().
                 val finish = synchronized(feedLock) { active.get() && !serverTookOver }
                 if (finish) { active.set(false); if (!keepOpen) svc.endSession(); ws.close() }
+              } finally { firstLocalDone.countDown() }
             }.apply { isDaemon = true; name = "TtsSpeakerLocal"; start() }
         }
 
@@ -344,9 +356,15 @@ object TtsSpeaker {
             private var pendingMeta: JSONObject? = null
 
             override fun onOpen() {
+                var startAt = wsOffset
+                if (localSentences.isNotEmpty()) {
+                    firstLocalDone.await(2500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    if (!firstLocalOkFlag.get()) startAt = 0
+                    serverCursor = startAt
+                }
                 ws.sendText(
                     JSONObject().apply {
-                        put("text", text.substring(wsOffset).trimStart())
+                        put("text", text.substring(startAt).trimStart())
                         put("engine", Settings.getTtsEngine(context))
                         Settings.getTtsVoice(context)?.let { put("voice", it) }
                     }.toString(),
@@ -355,6 +373,7 @@ object TtsSpeaker {
             }
 
             override fun onText(msg: String) {
+                if (jumpToOffset >= 0) Log.i(TAG, "WS text active=${active.get()} ${msg.take(60)}")
                 if (!active.get()) return
                 val obj = JSONObject(msg)
                 when (obj.optString("type")) {
@@ -377,6 +396,7 @@ object TtsSpeaker {
             }
 
             override fun onBinary(data: ByteArray) {
+                if (jumpToOffset >= 0) Log.i(TAG, "WS bin ${data.size} active=${active.get()} meta=${pendingMeta != null}")
                 if (!active.get()) return
                 val meta = pendingMeta ?: return
                 val words = mutableListOf<WordTiming>()
@@ -392,6 +412,7 @@ object TtsSpeaker {
                     if (at >= 0) serverCursor = at + sText.length
                     if (at >= 0 && at + sText.length <= localEnd) return // local already spoke it
                     serverTookOver = true
+                    Log.i(TAG, "ENQ server at=$at localEnd=$localEnd [${sText.take(40).replace('\n', ' ')}]")
                     svc.enqueueSentence(sText, words, data, meta.getInt("sample_rate"))
                 }
             }
