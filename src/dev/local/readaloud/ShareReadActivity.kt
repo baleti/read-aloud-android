@@ -2,6 +2,7 @@ package dev.local.readaloud
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -41,15 +42,30 @@ class ShareReadActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val sharedText = intent?.getStringExtra(Intent.EXTRA_TEXT)?.trim()
+        // Text files arrive as a stream/data URI ("Open with" = VIEW data,
+        // file-manager "Share" = EXTRA_STREAM) rather than EXTRA_TEXT.
+        val fileUri: Uri? = when (intent?.action) {
+            Intent.ACTION_VIEW -> intent.data
+            else -> @Suppress("DEPRECATION") intent?.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+        }
+        var fileName: String? = null
+        val sharedText = if (fileUri != null && intent?.getStringExtra(Intent.EXTRA_TEXT).isNullOrBlank()) {
+            fileName = fileUri.lastPathSegment?.substringAfterLast('/')
+            try {
+                contentResolver.openInputStream(fileUri)?.use { it.readBytes().toString(Charsets.UTF_8) }?.trim()
+            } catch (e: Exception) {
+                Log.e(TAG, "couldn't open $fileUri", e); null
+            }
+        } else intent?.getStringExtra(Intent.EXTRA_TEXT)?.trim()
         if (sharedText.isNullOrBlank()) {
             Toast.makeText(this, "Nothing to read in what was shared", Toast.LENGTH_LONG).show()
             finish()
             return
         }
-        val redditUrl = URL_PATTERN.find(sharedText)?.value
-        val anyUrl = ANY_URL.find(sharedText)?.value
-        val subject = intent?.getStringExtra(Intent.EXTRA_SUBJECT)
+        val isFile = fileUri != null && fileName != null
+        val redditUrl = if (isFile) null else URL_PATTERN.find(sharedText)?.value
+        val anyUrl = if (isFile) null else ANY_URL.find(sharedText)?.value
+        val subject = fileName ?: intent?.getStringExtra(Intent.EXTRA_SUBJECT)
 
         Toast.makeText(this, if (anyUrl != null) "Fetching page…" else "Reading…", Toast.LENGTH_SHORT).show()
         Thread {
