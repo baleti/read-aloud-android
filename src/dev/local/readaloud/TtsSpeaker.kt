@@ -243,7 +243,6 @@ object TtsSpeaker {
         })
 
         if (jumpToOffset >= 0) {
-            Log.i(TAG, "JUMP off=$jumpToOffset est=$jumpEstimateMs text=[${text.take(50).replace('\n', ' ')}]")
             svc.jumpToUpcoming(jumpEstimateMs)
             ReadAlongState.sessionBase = jumpToOffset
             ReadAlongState.resetKnownWords(jumpToOffset)
@@ -338,7 +337,6 @@ object TtsSpeaker {
                     synchronized(feedLock) {
                         if (!active.get() || serverTookOver) return@Thread
                         val ms = audio.pcm.size / 2 * 1000.0 / audio.sampleRate
-                        Log.i(TAG, "ENQ local [${sentence.take(40).replace('\n', ' ')}]")
                         svc.enqueueSentence(sentence, estimateWordTimings(sentence, ms), audio.pcm, audio.sampleRate)
                         localEnd = range.last + 1
                         if (i == 0) { firstLocalOkFlag.set(true); firstLocalDone.countDown() }
@@ -373,7 +371,6 @@ object TtsSpeaker {
             }
 
             override fun onText(msg: String) {
-                if (jumpToOffset >= 0) Log.i(TAG, "WS text active=${active.get()} ${msg.take(60)}")
                 if (!active.get()) return
                 val obj = JSONObject(msg)
                 when (obj.optString("type")) {
@@ -396,7 +393,6 @@ object TtsSpeaker {
             }
 
             override fun onBinary(data: ByteArray) {
-                if (jumpToOffset >= 0) Log.i(TAG, "WS bin ${data.size} active=${active.get()} meta=${pendingMeta != null}")
                 if (!active.get()) return
                 val meta = pendingMeta ?: return
                 val words = mutableListOf<WordTiming>()
@@ -412,7 +408,6 @@ object TtsSpeaker {
                     if (at >= 0) serverCursor = at + sText.length
                     if (at >= 0 && at + sText.length <= localEnd) return // local already spoke it
                     serverTookOver = true
-                    Log.i(TAG, "ENQ server at=$at localEnd=$localEnd [${sText.take(40).replace('\n', ' ')}]")
                     svc.enqueueSentence(sText, words, data, meta.getInt("sample_rate"))
                 }
             }
