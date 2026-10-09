@@ -230,6 +230,7 @@ object TtsSpeaker {
                 ReadAlongState.words = words
                 ReadAlongState.wordIdx = -1
                 ReadAlongState.sentence = text
+                ReadAlongState.sentenceSeq++
                 ReadAlongState.noteSentence(text, words, startMs)
                 OverlayIndicator.hide()
             }

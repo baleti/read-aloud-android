@@ -10,6 +10,8 @@ package dev.local.readaloud
 object ReadAlongState {
     @Volatile var fullText: String = ""
     @Volatile var sentence: String = ""
+    /** Bumped every time a sentence starts playing (even if its text repeats). */
+    @Volatile var sentenceSeq: Int = 0
     @Volatile var words: List<WordTiming> = emptyList()
     @Volatile var wordIdx: Int = -1
     /** A ScrollReader read is still adding content, so the total length shown is only what's known so far. */

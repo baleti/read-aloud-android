@@ -62,6 +62,7 @@ class PlayerActivity : Activity() {
     private var idleTicks = 0
     private var everActive = false
     private var seekBusyUntilMs = 0L
+    private var pendingSeq = -1 // >=0: a tapped sentence is highlighted, waiting for its audio to start
     private var downX = 0f
     private var downContentY = 0f
     private val pendingSpan = BackgroundColorSpan(0xFF4A3A30.toInt())
@@ -245,6 +246,7 @@ class PlayerActivity : Activity() {
         // expects spoken), not mid-sentence at the exact word.
         val sOff = sentenceStart(full, off)
         showPendingHighlight(sOff)
+        pendingSeq = ReadAlongState.sentenceSeq
         val live = svc?.takeIf { it.hasActiveSession() }
         if (live != null) {
             // Word already has audio: seek straight to it.
@@ -393,6 +395,12 @@ class PlayerActivity : Activity() {
             shownSentence = ""; shownWordIdx = -2; sentStart = -1; sentEnd = -1
         }
         val sp = spannable ?: return
+        // Keep the tapped sentence highlighted until the new audio actually starts, instead of
+        // flashing back to the previous sentence's highlight while it loads.
+        if (pendingSeq >= 0) {
+            if (ReadAlongState.sentenceSeq == pendingSeq) return
+            pendingSeq = -1
+        }
         val sentence = ReadAlongState.sentence
         if (sentence != shownSentence) {
             shownSentence = sentence; shownWordIdx = -2
