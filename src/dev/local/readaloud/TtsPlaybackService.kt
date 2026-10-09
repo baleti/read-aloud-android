@@ -190,6 +190,8 @@ class TtsPlaybackService : Service() {
     private var focusRequest: AudioFocusRequest? = null
     @Volatile private var hasAudioFocus = false
     @Volatile private var pausedByFocusLoss = false
+    // The user (not an audio-focus loss) paused: don't auto-start over that.
+    @Volatile private var userPaused = false
 
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
         when (change) {
@@ -272,6 +274,8 @@ class TtsPlaybackService : Service() {
     }
 
     fun startSession(title: String) {
+        userPaused = false
+        pausedByFocusLoss = false
         sessionGeneration++ // invalidate any onQueueIdle already queued from a stop before this
         hasActiveSession = true
         requestAudioFocus()
@@ -316,9 +320,17 @@ class TtsPlaybackService : Service() {
     fun enqueueSentence(text: String, words: List<WordTiming>, pcm: ByteArray, sampleRate: Int) {
         idleSignaled = false
         val totalMs: Long
+        val first: Boolean
         synchronized(lock) {
             allSentences.add(QueuedSentence(text, words, pcm, sampleRate))
             totalMs = allSentences.sumOf { it.durationMs }
+            first = allSentences.size == 1
+        }
+        // Autoplay: a new read should start by itself. A stray transient audio-focus loss while the
+        // page was being fetched (or any other stall) used to leave it waiting for a manual Play.
+        if (first && !playing && !userPaused) {
+            pausedByFocusLoss = false
+            mainHandler.post { if (!playing && !userPaused) resume() }
         }
         mediaSession?.setMetadata(
             MediaMetadata.Builder()
@@ -353,6 +365,7 @@ class TtsPlaybackService : Service() {
     }
 
     fun pause() {
+        if (!pausedByFocusLoss) userPaused = true
         setPositionAnchor(estimatedPositionMs(), false)
         // Freeze the highlight anchor at the position it had actually
         // reached (same rebase setPlaybackSpeed() does before swapping
@@ -369,6 +382,7 @@ class TtsPlaybackService : Service() {
     }
 
     fun resume() {
+        userPaused = false
         requestAudioFocus()
         setPositionAnchor(estimatedPositionMs(), true)
         // Restart the wall-clock baseline from right now, so the elapsed-

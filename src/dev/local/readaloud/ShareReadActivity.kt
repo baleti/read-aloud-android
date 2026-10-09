@@ -75,6 +75,9 @@ class ShareReadActivity : Activity() {
         Toast.makeText(this, if (anyUrl != null) "Fetching page…" else "Reading…", Toast.LENGTH_SHORT).show()
         Thread {
             try {
+                // A new share replaces whatever is playing right away, not only once the new page has
+                // been fetched/rendered (which can take many seconds, leaving the old read going).
+                TtsSpeaker.stopCurrent(applicationContext)
                 when {
                     redditUrl != null -> fetchAndSpeak(redditUrl)
                     anyUrl != null -> fetchPageAndSpeak(anyUrl)
