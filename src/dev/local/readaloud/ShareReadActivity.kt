@@ -50,7 +50,7 @@ class ShareReadActivity : Activity() {
         }
         var fileName: String? = null
         val sharedText = if (fileUri != null && intent?.getStringExtra(Intent.EXTRA_TEXT).isNullOrBlank()) {
-            fileName = fileUri.lastPathSegment?.substringAfterLast('/')
+            fileName = displayNameOf(fileUri)
             try {
                 contentResolver.openInputStream(fileUri)?.use { it.readBytes().toString(Charsets.UTF_8) }?.trim()
             } catch (e: Exception) {
@@ -65,7 +65,12 @@ class ShareReadActivity : Activity() {
         val isFile = fileUri != null && fileName != null
         val redditUrl = if (isFile) null else URL_PATTERN.find(sharedText)?.value
         val anyUrl = if (isFile) null else ANY_URL.find(sharedText)?.value
-        val subject = fileName ?: intent?.getStringExtra(Intent.EXTRA_SUBJECT)
+        // Signal-style content URIs end in an opaque id ("…/attachment/5287"), so a file with no real name
+        // gets a title from its first line instead.
+        val subject = fileName?.takeIf { !it.matches(Regex("\\d+")) }
+            ?: intent?.getStringExtra(Intent.EXTRA_SUBJECT)
+            ?: intent?.getStringExtra(Intent.EXTRA_TITLE)
+            ?: if (isFile) firstLineTitle(sharedText) else null
 
         Toast.makeText(this, if (anyUrl != null) "Fetching page…" else "Reading…", Toast.LENGTH_SHORT).show()
         Thread {
@@ -84,6 +89,21 @@ class ShareReadActivity : Activity() {
         }.apply { isDaemon = true; name = "ShareFetch"; start() }
 
         finish()
+    }
+
+    /** The provider's real file name (OpenableColumns.DISPLAY_NAME), minus a .txt extension; the URI's last segment as a fallback. */
+    private fun displayNameOf(uri: Uri): String? {
+        try {
+            contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0)?.takeIf { it.isNotBlank() }?.let { return it.removeSuffix(".txt") }
+            }
+        } catch (e: Exception) { Log.w(TAG, "no display name for $uri: ${e.message}") }
+        return uri.lastPathSegment?.substringAfterLast('/')
+    }
+
+    private fun firstLineTitle(text: String): String {
+        val line = text.lineSequence().map { it.trim().trimStart('#', '*', '-', ' ') }.firstOrNull { it.length >= 3 } ?: return "Shared text"
+        return if (line.length > 70) line.take(70).trimEnd() + "…" else line
     }
 
     private fun fetchPageAndSpeak(url: String) {
