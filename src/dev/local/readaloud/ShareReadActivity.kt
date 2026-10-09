@@ -107,7 +107,13 @@ class ShareReadActivity : Activity() {
     }
 
     private fun fetchPageAndSpeak(url: String) {
-        val page = WebArticleExtractor.fetch(url)
+        var fetched = WebArticleExtractor.fetch(url)
+        // A plain fetch of a JavaScript-rendered site returns an empty shell: render it in a WebView instead.
+        if (fetched == null || fetched.text.length < 200) {
+            mainHandler.post { Toast.makeText(applicationContext, "Rendering page…", Toast.LENGTH_SHORT).show() }
+            WebArticleExtractor.fetchRendered(applicationContext, url)?.let { fetched = it }
+        }
+        val page = fetched
         if (page == null || page.text.length < 40) {
             mainHandler.post { Toast.makeText(applicationContext, "Couldn't get readable text from that page", Toast.LENGTH_LONG).show() }
             return

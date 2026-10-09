@@ -56,4 +56,64 @@ object WebArticleExtractor {
         val text = if (lines.sumOf { it.length } >= 200) lines.joinToString("\n\n") else plain(body)
         return Result(title, text)
     }
+
+    /**
+     * For client-rendered pages (Angular/React shells whose HTML holds no text, e.g. gridarchitects.co.uk):
+     * load the URL in an off-screen WebView so its JavaScript runs, wait for the content to settle,
+     * then extract from the rendered DOM. Blocks the calling (background) thread; null on failure.
+     */
+    @android.annotation.SuppressLint("SetJavaScriptEnabled")
+    fun fetchRendered(context: android.content.Context, url: String, timeoutMs: Long = 25_000): Result? {
+        val main = android.os.Handler(android.os.Looper.getMainLooper())
+        val done = java.util.concurrent.CountDownLatch(1)
+        var html: String? = null
+        var webView: android.webkit.WebView? = null
+        val deadline = System.currentTimeMillis() + timeoutMs
+
+        fun finish(h: String?) { if (done.count > 0) { html = h; done.countDown() } }
+
+        // Poll the rendered text length until it stops growing (two equal readings), then grab the HTML.
+        fun poll(lastLen: Int, stable: Int) {
+            val wv = webView
+            if (wv == null) { finish(null); return }
+            if (System.currentTimeMillis() > deadline) {
+                wv.evaluateJavascript("document.documentElement.outerHTML") { finish(decode(it)) }
+                return
+            }
+            wv.evaluateJavascript("document.body ? document.body.innerText.length : 0") { v ->
+                val len = v?.trim()?.toIntOrNull() ?: 0
+                val st = if (len > 200 && len == lastLen) stable + 1 else 0
+                if (st >= 2) wv.evaluateJavascript("document.documentElement.outerHTML") { finish(decode(it)) }
+                else main.postDelayed({ poll(len, st) }, 700)
+            }
+        }
+
+        main.post {
+            try {
+                val wv = android.webkit.WebView(context.applicationContext)
+                webView = wv
+                wv.settings.javaScriptEnabled = true
+                wv.settings.domStorageEnabled = true
+                wv.settings.userAgentString = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+                wv.webViewClient = object : android.webkit.WebViewClient() {
+                    override fun onPageFinished(view: android.webkit.WebView?, u: String?) {
+                        main.postDelayed({ poll(-1, 0) }, 1200)
+                    }
+                    override fun onReceivedError(view: android.webkit.WebView?, req: android.webkit.WebResourceRequest?, err: android.webkit.WebResourceError?) {
+                        if (req?.isForMainFrame == true) finish(null)
+                    }
+                }
+                wv.loadUrl(url)
+            } catch (e: Exception) { finish(null) }
+        }
+        done.await(timeoutMs + 5_000, java.util.concurrent.TimeUnit.MILLISECONDS)
+        main.post { try { webView?.stopLoading(); webView?.destroy() } catch (_: Exception) {} }
+        return html?.let { extract(it) }
+    }
+
+    /** evaluateJavascript hands back a JSON string literal. */
+    private fun decode(raw: String?): String? {
+        if (raw == null) return null
+        return try { org.json.JSONTokener(raw).nextValue() as? String } catch (_: Exception) { null }
+    }
 }
