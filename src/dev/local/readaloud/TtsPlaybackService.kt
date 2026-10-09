@@ -468,7 +468,7 @@ class TtsPlaybackService : Service() {
         }
         seekGeneration++ // an in-flight write loop sees this and abandons itself; playLoop re-reads playIndex/seekOffsetMs
         requestAudioFocus()
-        audioTrack?.let { try { it.pause(); it.flush() } catch (_: Exception) {} }
+        audioTrack?.let { try { it.pause(); it.flush(); framesWritten = 0L } catch (_: Exception) {} }
         setPlaying(true)
         setPositionAnchor(newPosMs, true)
         updatePlaybackState(PlaybackState.STATE_PLAYING)
@@ -513,7 +513,7 @@ class TtsPlaybackService : Service() {
         sessionEnded = false // a fresh stream is about to start - not done yet
         idleSignaled = false
         requestAudioFocus()
-        audioTrack?.let { try { it.pause(); it.flush() } catch (_: Exception) {} }
+        audioTrack?.let { try { it.pause(); it.flush(); framesWritten = 0L } catch (_: Exception) {} }
         setPlaying(true)
         setPositionAnchor(resumeMs, true)
         updatePlaybackState(PlaybackState.STATE_PLAYING)
@@ -533,7 +533,7 @@ class TtsPlaybackService : Service() {
         }
         setPositionAnchor(0L, false)
         audioTrack?.let {
-            try { it.pause(); it.flush(); it.stop() } catch (_: Exception) {}
+            try { it.pause(); it.flush(); it.stop(); framesWritten = 0L } catch (_: Exception) {}
         }
         updatePlaybackState(PlaybackState.STATE_STOPPED)
         try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
@@ -560,6 +560,20 @@ class TtsPlaybackService : Service() {
                 Log.e(TAG, "playLoop crashed", e)
             }
         }.apply { isDaemon = true; name = "TtsPlayback"; start() }
+    }
+
+    @Volatile private var framesWritten = 0L // 16-bit mono frames written to the current audioTrack
+
+    /** Block until [track] has actually played [frames] (or the session is stopped/seeked/times out). */
+    private fun drainTrack(track: AudioTrack, frames: Long, generation: Int) {
+        val deadline = System.currentTimeMillis() + 4000
+        try {
+            while (!stopRequested && seekGeneration == generation && playing && System.currentTimeMillis() < deadline) {
+                val head = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                if (head >= frames) break
+                Thread.sleep(20)
+            }
+        } catch (_: Exception) {}
     }
 
     private fun playLoop() {
@@ -593,7 +607,12 @@ class TtsPlaybackService : Service() {
             idleSignaled = false
 
             if (audioTrack == null || audioTrack?.sampleRate != current.sampleRate) {
+                // write() returns once audio is copied into the track's buffer, not once it has been
+                // heard: releasing now cut off the tail of the previous sentence whenever the sample
+                // rate changed (fast local voice -> server voice). Let it finish first.
+                audioTrack?.let { old -> drainTrack(old, framesWritten, myGeneration) }
                 audioTrack?.release()
+                framesWritten = 0L
                 audioTrack = buildAudioTrack(current.sampleRate)
                 try {
                     audioTrack?.playbackParams = PlaybackParams().setSpeed(playbackSpeed).setPitch(1.0f)
@@ -668,6 +687,7 @@ class TtsPlaybackService : Service() {
                 val written = track.write(current.pcm, offset, chunk)
                 if (written < 0) break
                 offset += written
+                framesWritten += written / 2
             }
             mainHandler.post { listener?.onSentenceEnd() }
 
