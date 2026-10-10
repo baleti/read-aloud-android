@@ -351,6 +351,30 @@ object TtsSpeaker {
             }.apply { isDaemon = true; name = "TtsSpeakerLocal"; start() }
         }
 
+        // Mid-stream fallback: once the server has taken over, the first local thread is gone. If
+        // the server then falls behind (buffer nearly spent, playing, not paused), speak the next
+        // sentence on-device instead of stalling; server sentences local already covered are dropped
+        // by the localEnd check, and the server resumes the moment it lands one past that.
+        if (local != null && localSentences.isNotEmpty()) {
+            Thread {
+                while (active.get()) {
+                    Thread.sleep(150)
+                    if (!serverTookOver || !svc.isPlaying() || svc.bufferedAheadMs() > 400) continue
+                    val from = synchronized(feedLock) { maxOf(serverCursor, localEnd) }
+                    val range = localSentences.firstOrNull { it.last + 1 > from } ?: continue
+                    val sentence = text.substring(range)
+                    val audio = local.synthesize(speakableForLocalTts(sentence)) ?: continue
+                    synchronized(feedLock) {
+                        if (!active.get() || maxOf(serverCursor, localEnd) >= range.last + 1) return@synchronized
+                        val ms = audio.pcm.size / 2 * 1000.0 / audio.sampleRate
+                        Log.w(TAG, "server behind, local fallback for sentence at ${range.first}")
+                        svc.enqueueSentence(sentence, estimateWordTimings(sentence, ms), audio.pcm, audio.sampleRate)
+                        localEnd = range.last + 1
+                    }
+                }
+            }.apply { isDaemon = true; name = "TtsSpeakerFallback"; start() }
+        }
+
         ws.connect(object : WebSocketClient.Listener {
             private var pendingMeta: JSONObject? = null
 
