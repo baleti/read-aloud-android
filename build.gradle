@@ -91,4 +91,5 @@ dependencies {
     // is precisely the part that made hand-integrating it into the old
     // aapt2/kotlinc/d8 pipeline (build.sh) unsafe to attempt.
     implementation 'com.google.android.gms:play-services-mlkit-text-recognition:19.0.1'
+    implementation 'androidx.webkit:webkit:1.12.1'
 }

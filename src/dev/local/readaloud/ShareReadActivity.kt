@@ -121,7 +121,6 @@ class ShareReadActivity : Activity() {
     }
 
     private fun fetchPageAndSpeak(url: String) {
-        if (Regex("""^https?://(www\.)?claude\.ai/(artifact|public/artifacts)/""").containsMatchIn(url) && readScreenInstead("claude artifact")) return
         var fetched = WebArticleExtractor.fetch(url)
         // A plain fetch of a JavaScript-rendered site returns an empty shell: render it in a WebView instead.
         if (fetched == null || fetched.text.length < 200) {

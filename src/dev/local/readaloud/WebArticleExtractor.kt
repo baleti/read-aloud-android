@@ -72,18 +72,37 @@ object WebArticleExtractor {
 
         fun finish(h: String?) { if (done.count > 0) { html = h; done.countDown() } }
 
+        // Text living in sub-frames (claude.ai artifacts render in a cross-origin iframe the page's own JS
+        // can't read): a document-start script in EVERY frame reports its rendered HTML back over a
+        // WebMessage channel. Best (longest-text) non-top frame wins over a thin top document.
+        var frameHtml: String? = null
+        var frameLen = 0
+        val frameScript = """
+            (function(){ if (window === window.top || !window.RAFrame) return;
+              var last = -1;
+              setInterval(function(){ try {
+                var n = document.body ? document.body.innerText.length : 0;
+                if (n > 200 && n !== last) { last = n; RAFrame.postMessage(document.documentElement.outerHTML); }
+              } catch(e){} }, 1000); })();
+        """.trimIndent()
+
         // Poll the rendered text length until it stops growing (two equal readings), then grab the HTML.
         fun poll(lastLen: Int, stable: Int) {
             val wv = webView
             if (wv == null) { finish(null); return }
             if (System.currentTimeMillis() > deadline) {
-                wv.evaluateJavascript("document.documentElement.outerHTML") { finish(decode(it)) }
+                if (frameLen > 200) finish(frameHtml)
+                else wv.evaluateJavascript("document.documentElement.outerHTML") { finish(decode(it)) }
                 return
             }
             wv.evaluateJavascript("document.body ? document.body.innerText.length : 0") { v ->
-                val len = v?.trim()?.toIntOrNull() ?: 0
+                val topLen = v?.trim()?.toIntOrNull() ?: 0
+                val len = maxOf(topLen, frameLen)
                 val st = if (len > 200 && len == lastLen) stable + 1 else 0
-                if (st >= 2) wv.evaluateJavascript("document.documentElement.outerHTML") { finish(decode(it)) }
+                if (st >= 2) {
+                    if (frameLen > topLen) finish(frameHtml)
+                    else wv.evaluateJavascript("document.documentElement.outerHTML") { finish(decode(it)) }
+                }
                 else main.postDelayed({ poll(len, st) }, 700)
             }
         }
@@ -94,7 +113,21 @@ object WebArticleExtractor {
                 webView = wv
                 wv.settings.javaScriptEnabled = true
                 wv.settings.domStorageEnabled = true
-                wv.settings.userAgentString = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+                // Default WebView user agent: a spoofed desktop UA mismatched the client hints and tripped
+                // bot checks (Cloudflare) on some sites.
+                try {
+                    if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT) &&
+                        androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                        androidx.webkit.WebViewCompat.addWebMessageListener(wv, "RAFrame", setOf("*")) { _, message, _, isMainFrame, _ ->
+                            val h = message.data
+                            if (!isMainFrame && h != null) {
+                                val n = extract(h).text.length
+                                if (n >= frameLen) { frameLen = n; frameHtml = h }
+                            }
+                        }
+                        androidx.webkit.WebViewCompat.addDocumentStartJavaScript(wv, frameScript, setOf("*"))
+                    }
+                } catch (e: Exception) { android.util.Log.w("WebArticleExtractor", "frame capture unavailable: ${e.message}") }
                 wv.webViewClient = object : android.webkit.WebViewClient() {
                     override fun onPageFinished(view: android.webkit.WebView?, u: String?) {
                         main.postDelayed({ poll(-1, 0) }, 1200)
