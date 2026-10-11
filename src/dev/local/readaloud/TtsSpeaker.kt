@@ -382,6 +382,56 @@ object TtsSpeaker {
             }.apply { isDaemon = true; name = "TtsSpeakerFallback"; start() }
         }
 
+        // Rescue: if the Chatterbox stream fails for ANY reason once it had taken over (or local never
+        // started), on-device TTS reads everything the server did not deliver, from the first
+        // undelivered sentence to the end, then ends the session. Playback must never just stop.
+        val allSentences = splitLocalSentences(text)
+        val rescueStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+        var doneReceived = false
+        val fallbackNotified = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun notifyFallback(why: String) {
+            if (!fallbackNotified.compareAndSet(false, true)) return
+            mainHandler.post {
+                android.widget.Toast.makeText(context, "Chatterbox unavailable ($why) - using on-device voice", android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+        fun startRescue(why: String) {
+            notifyFallback(why)
+            if (doneReceived || !active.get()) return
+            if (!(serverTookOver || localSentences.isEmpty())) return // the first local thread still covers it
+            if (!rescueStarted.compareAndSet(false, true)) return
+            Log.w(TAG, "server stream failed ($why): on-device TTS takes over")
+            Thread {
+                var skippedTo = 0
+                try {
+                    var waited = 0
+                    while (active.get() && waited < 15000 && localTts?.isReady() != true) {
+                        warmUp(context); Thread.sleep(250); waited += 250
+                    }
+                    val engine = localTts?.takeIf { it.isReady() }
+                    if (engine == null) { Log.e(TAG, "rescue: no on-device TTS available"); return@Thread }
+                    while (active.get()) {
+                        val from = synchronized(feedLock) { maxOf(serverCursor, localEnd, skippedTo) }
+                        val range = allSentences.firstOrNull { it.last + 1 > from } ?: break
+                        while (active.get() && svc.bufferedAheadMs() > 700) Thread.sleep(100)
+                        val sentence = text.substring(range)
+                        val audio = engine.synthesize(speakableForLocalTts(sentence))
+                            ?: engine.synthesize(speakableForLocalTts(sentence))
+                        if (audio == null) { skippedTo = range.last + 1; continue }
+                        synchronized(feedLock) {
+                            if (!active.get()) return@synchronized
+                            val ms = audio.pcm.size / 2 * 1000.0 / audio.sampleRate
+                            svc.enqueueSentence(sentence, estimateWordTimings(sentence, ms), audio.pcm, audio.sampleRate)
+                            localEnd = range.last + 1
+                        }
+                    }
+                } finally {
+                    if (active.get()) { active.set(false); if (!keepOpen) svc.endSession() }
+                    try { ws.close() } catch (_: Exception) {}
+                }
+            }.apply { isDaemon = true; name = "TtsSpeakerRescue"; start() }
+        }
+
         ws.connect(object : WebSocketClient.Listener {
             private var pendingMeta: JSONObject? = null
 
@@ -409,17 +459,15 @@ object TtsSpeaker {
                     "sentence" -> pendingMeta = obj
                     "status" -> OverlayIndicator.addStatus(obj.optString("message"), obj.optInt("sentence"), obj.optInt("of"))
                     "done" -> {
+                        doneReceived = true
                         // Everything was either enqueued by the server or
                         // already covered by local audio.
                         active.set(false); if (!keepOpen) svc.endSession(); ws.close(); OverlayIndicator.hide()
                     }
                     "error" -> {
                         Log.e(TAG, "server error: ${obj.optString("message")}")
-                        if (localSentences.isNotEmpty() && !serverTookOver) return // local TTS keeps reading
-                        active.set(false)
-                        if (!keepOpen) svc.endSession()
-                        ws.close()
-                        OverlayIndicator.hide()
+                        notifyFallback(obj.optString("message").take(60))
+                        startRescue("error")
                     }
                 }
             }
@@ -446,24 +494,24 @@ object TtsSpeaker {
 
             override fun onFailure(error: Throwable) {
                 Log.e(TAG, "websocket failed", error)
-                if (localSentences.isNotEmpty() && !serverTookOver) return // local TTS keeps reading
-                active.set(false)
-                OverlayIndicator.hide()
+                notifyFallback(error.message?.take(60) ?: "connection failed")
+                startRescue("websocket failure")
             }
             override fun onClosed() {
                 // The server closing the socket (error, ai1 down) must NOT stop on-device reading:
                 // the local thread keeps running on `active` and ends the session itself.
-                if (!serverTookOver && localSentences.isNotEmpty()) return
-                active.set(false); if (!serverTookOver && localSentences.isEmpty()) OverlayIndicator.hide()
+                if (!doneReceived && active.get()) { startRescue("socket closed"); return }
+                if (!rescueStarted.get()) active.set(false)
             }
         })
         if (activeWs === ws) activeWs = null
 
         // The socket may be gone (server down) while on-device TTS is still reading the text: stay
         // bound until the local thread has enqueued everything and ended the session itself.
-        if (localSentences.isNotEmpty()) {
+        startRescue("connection ended") // no-op after a normal "done"
+        if (localSentences.isNotEmpty() || rescueStarted.get()) {
             var localWaited = 0
-            while (active.get() && !serverTookOver && localWaited < 10 * 60 * 1000) { Thread.sleep(200); localWaited += 200 }
+            while (active.get() && (!serverTookOver || rescueStarted.get()) && localWaited < 10 * 60 * 1000) { Thread.sleep(200); localWaited += 200 }
         }
 
         if (waitUntilPlaybackDone) {
