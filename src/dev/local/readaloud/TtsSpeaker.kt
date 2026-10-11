@@ -334,7 +334,14 @@ object TtsSpeaker {
                     if (!active.get() || serverTookOver) return@Thread
                     val sentence = text.substring(range)
                     val audio = local.synthesize(speakableForLocalTts(sentence))
-                    if (audio == null) { Log.w(TAG, "local synth failed for sentence $i"); firstLocalDone.countDown(); return@Thread }
+                        ?: local.synthesize(speakableForLocalTts(sentence))
+                    if (audio == null) {
+                        // One bad sentence must not end local reading (the server may be down): skip it.
+                        Log.w(TAG, "local synth failed for sentence $i, skipping")
+                        if (i == 0) firstLocalDone.countDown()
+                        continue
+                    }
+                    Log.i(TAG, "local sentence $i enqueued")
                     synchronized(feedLock) {
                         if (!active.get() || serverTookOver) return@Thread
                         val ms = audio.pcm.size / 2 * 1000.0 / audio.sampleRate
@@ -443,9 +450,21 @@ object TtsSpeaker {
                 active.set(false)
                 OverlayIndicator.hide()
             }
-            override fun onClosed() { active.set(false); if (!serverTookOver && localSentences.isEmpty()) OverlayIndicator.hide() }
+            override fun onClosed() {
+                // The server closing the socket (error, ai1 down) must NOT stop on-device reading:
+                // the local thread keeps running on `active` and ends the session itself.
+                if (!serverTookOver && localSentences.isNotEmpty()) return
+                active.set(false); if (!serverTookOver && localSentences.isEmpty()) OverlayIndicator.hide()
+            }
         })
         if (activeWs === ws) activeWs = null
+
+        // The socket may be gone (server down) while on-device TTS is still reading the text: stay
+        // bound until the local thread has enqueued everything and ended the session itself.
+        if (localSentences.isNotEmpty()) {
+            var localWaited = 0
+            while (active.get() && !serverTookOver && localWaited < 10 * 60 * 1000) { Thread.sleep(200); localWaited += 200 }
+        }
 
         if (waitUntilPlaybackDone) {
             var waited = 0
