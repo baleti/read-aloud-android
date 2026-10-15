@@ -51,22 +51,26 @@ class LocalTts(context: Context) {
     /** Blocks (call off the main thread) until the sentence is rendered or
      * `timeoutMs` passes. Null on any failure - the caller just carries on
      * without a local bridge. */
-    fun synthesize(sentence: String, timeoutMs: Long = 4000): Audio? {
+    // @Synchronized: the engine has ONE progress listener, and the first-sentence, mid-stream fallback and
+    // rescue threads all call this. Concurrent calls stole each other's onDone, timed out at 4s and were
+    // reported as 'local synth failed ... skipping', i.e. gaps/stops in on-device reading.
+    @Synchronized
+    fun synthesize(sentence: String, timeoutMs: Long = 8000): Audio? {
         val engine = tts ?: return null
         if (!ready) return null
         val id = UUID.randomUUID().toString()
         val file = File(cacheDir, "localtts-$id.wav")
         val latch = CountDownLatch(1)
-        var ok = false
+        val okFlag = java.util.concurrent.atomic.AtomicBoolean(false)
         engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {}
-            override fun onDone(utteranceId: String?) { if (utteranceId == id) { ok = true; latch.countDown() } }
+            override fun onDone(utteranceId: String?) { if (utteranceId == id) { okFlag.set(true); latch.countDown() } }
             @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) { if (utteranceId == id) latch.countDown() }
         })
         return try {
             if (engine.synthesizeToFile(sentence, Bundle(), file, id) != TextToSpeech.SUCCESS) return null
-            if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS) || !ok) return null
+            if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS) || !okFlag.get()) return null
             parseWav(file.readBytes())
         } catch (e: Exception) {
             Log.w(TAG, "local synth failed: ${e.message}")
