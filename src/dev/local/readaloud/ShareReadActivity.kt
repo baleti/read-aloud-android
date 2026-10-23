@@ -49,6 +49,13 @@ class ShareReadActivity : Activity() {
             else -> @Suppress("DEPRECATION") intent?.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
         }
         var fileName: String? = null
+        val isPdf = fileUri != null && (intent?.type == "application/pdf" ||
+            contentResolver.getType(fileUri) == "application/pdf" || fileUri.lastPathSegment?.endsWith(".pdf", true) == true)
+        if (isPdf && fileUri != null) {
+            readPdf(fileUri)
+            finish()
+            return
+        }
         val sharedText = if (fileUri != null && intent?.getStringExtra(Intent.EXTRA_TEXT).isNullOrBlank()) {
             fileName = displayNameOf(fileUri)
             try {
@@ -92,6 +99,31 @@ class ShareReadActivity : Activity() {
         }.apply { isDaemon = true; name = "ShareFetch"; start() }
 
         finish()
+    }
+
+    /** OCRs a shared/opened PDF page by page (PdfReader), then speaks the whole text. */
+    private fun readPdf(uri: Uri) {
+        val title = displayNameOf(uri)?.removeSuffix(".pdf")?.removeSuffix(".PDF") ?: "PDF"
+        Toast.makeText(this, "Reading PDF (this takes a moment)…", Toast.LENGTH_LONG).show()
+        Thread {
+            try {
+                TtsSpeaker.stopCurrent(applicationContext)
+                var lastToast = 0L
+                val text = PdfReader.extract(applicationContext, uri) { done, total ->
+                    val now = System.currentTimeMillis()
+                    if (now - lastToast > 8000 && done < total) {
+                        lastToast = now
+                        mainHandler.post { Toast.makeText(applicationContext, "PDF: page $done of $total…", Toast.LENGTH_SHORT).show() }
+                    }
+                }
+                if (text.length < 20) {
+                    mainHandler.post { Toast.makeText(applicationContext, "No readable text found in that PDF", Toast.LENGTH_LONG).show() }
+                } else TtsSpeaker.speak(applicationContext, title, text, highlightScreen = false)
+            } catch (e: Exception) {
+                Log.e(TAG, "pdf read failed", e)
+                mainHandler.post { Toast.makeText(applicationContext, "Couldn't read that PDF: ${e.message}", Toast.LENGTH_LONG).show() }
+            }
+        }.apply { isDaemon = true; name = "PdfRead"; start() }
     }
 
     /** The provider's real file name (OpenableColumns.DISPLAY_NAME), minus a .txt extension; the URI's last segment as a fallback. */
