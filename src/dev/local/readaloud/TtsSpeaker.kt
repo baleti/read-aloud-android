@@ -184,10 +184,6 @@ object TtsSpeaker {
             ReadHistory.resumeOffset(context, textArg) else 0
         val text = textArg.substring(resumeOff)
         val prefix = if (resumeOff > 0) textArg.substring(0, resumeOff) else readAlongPrefix
-        if (resumeOff > 0) {
-            val pct = resumeOff * 100 / textArg.length
-            mainHandler.post { android.widget.Toast.makeText(context, "Resuming \"$title\" at $pct%", android.widget.Toast.LENGTH_LONG).show() }
-        }
 
         // A new speak() call ALWAYS supersedes whatever was in flight
         // before, on the network side too - see this object's own doc.
