@@ -158,7 +158,7 @@ object TtsSpeaker {
     fun speak(
         context: Context,
         title: String,
-        text: String,
+        textArg: String,
         waitUntilPlaybackDone: Boolean = false,
         // Streaming reads (ScrollReader): feed a screenful at a time into ONE
         // playback session. continueSession skips startSession() and appends to
@@ -179,6 +179,16 @@ object TtsSpeaker {
         jumpToOffset: Int = -1,
         jumpEstimateMs: Long = 0L,
     ) {
+        // Reopening a document read before (same text): pick up where that read ended.
+        val resumeOff = if (!highlightScreen && readAlongPrefix.isEmpty() && !continueSession && jumpToOffset < 0)
+            ReadHistory.resumeOffset(context, textArg) else 0
+        val text = textArg.substring(resumeOff)
+        val prefix = if (resumeOff > 0) textArg.substring(0, resumeOff) else readAlongPrefix
+        if (resumeOff > 0) {
+            val pct = resumeOff * 100 / textArg.length
+            mainHandler.post { android.widget.Toast.makeText(context, "Resuming \"$title\" at $pct%", android.widget.Toast.LENGTH_LONG).show() }
+        }
+
         // A new speak() call ALWAYS supersedes whatever was in flight
         // before, on the network side too - see this object's own doc.
         closeActiveWs()
@@ -251,11 +261,11 @@ object TtsSpeaker {
         } else if (continueSession) {
             ReadAlongState.append(text)
         } else {
-            ReadAlongState.begin(readAlongPrefix + text)
-            ReadAlongState.sessionBase = readAlongPrefix.length
+            ReadAlongState.begin(prefix + text)
+            ReadAlongState.sessionBase = prefix.length
             if (!highlightScreen) {
                 ReadAlongState.persistNew(context, title)
-                ReadAlongState.offset = readAlongPrefix.length
+                ReadAlongState.offset = prefix.length
             }
             svc.startSession(title)
         }

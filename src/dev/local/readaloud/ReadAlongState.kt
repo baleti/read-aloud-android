@@ -35,6 +35,8 @@ object ReadAlongState {
     @Volatile var offset: Int = 0
     @Volatile var persisting = false
         private set
+    /** [ReadHistory] key of the persisted document. */
+    private var docKey = ""
     private var appCtx: android.content.Context? = null
     private val prefs get() = appCtx?.getSharedPreferences("readaloud_last_doc", android.content.Context.MODE_PRIVATE)
     private fun docFile() = java.io.File(appCtx!!.filesDir, "last_doc.txt")
@@ -56,6 +58,8 @@ object ReadAlongState {
         persisting = true
         this.title = title; offset = 0
         prefs?.edit()?.putString("title", title)?.putInt("offset", 0)?.apply()
+        docKey = ReadHistory.key(fullText)
+        ReadHistory.touch(appCtx!!, docKey, title, fullText.length)
         saveText()
     }
 
@@ -114,6 +118,7 @@ object ReadAlongState {
         if (persisting) {
             offset = at
             prefs?.edit()?.putInt("offset", at)?.apply()
+            appCtx?.let { if (docKey.isNotEmpty()) ReadHistory.record(it, docKey, at, full.length, title) }
         }
     }
 
