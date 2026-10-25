@@ -51,8 +51,12 @@ class ShareReadActivity : Activity() {
         var fileName: String? = null
         val isPdf = fileUri != null && (intent?.type == "application/pdf" ||
             contentResolver.getType(fileUri) == "application/pdf" || fileUri.lastPathSegment?.endsWith(".pdf", true) == true)
-        if (isPdf && fileUri != null) {
-            readPdf(fileUri)
+        val docName = fileUri?.let { displayNameOf(it) }.orEmpty()
+        val mime = fileUri?.let { intent?.type ?: contentResolver.getType(it) }.orEmpty()
+        val isDocx = fileUri != null && (mime.contains("wordprocessingml") || docName.endsWith(".docx", true))
+        val isHtml = fileUri != null && !isPdf && !isDocx && (mime == "text/html" || docName.endsWith(".html", true) || docName.endsWith(".htm", true))
+        if (fileUri != null && (isPdf || isDocx || isHtml)) {
+            readDocument(fileUri, if (isPdf) "pdf" else if (isDocx) "docx" else "html")
             finish()
             return
         }
@@ -101,29 +105,36 @@ class ShareReadActivity : Activity() {
         finish()
     }
 
-    /** OCRs a shared/opened PDF page by page (PdfReader), then speaks the whole text. */
-    private fun readPdf(uri: Uri) {
-        val title = displayNameOf(uri)?.removeSuffix(".pdf")?.removeSuffix(".PDF") ?: "PDF"
-        Toast.makeText(this, "Reading PDF (this takes a moment)…", Toast.LENGTH_LONG).show()
+    /** PDF (OCR), DOCX or HTML file -> text, then speaks it. Extraction is cached by file checksum (DocCache). */
+    private fun readDocument(uri: Uri, kind: String) {
+        val title = (displayNameOf(uri) ?: kind.uppercase()).replace(Regex("\\.(pdf|docx|html?)$", RegexOption.IGNORE_CASE), "")
+        Toast.makeText(this, if (kind == "pdf") "Reading PDF (this takes a moment)…" else "Reading…", Toast.LENGTH_LONG).show()
         Thread {
             try {
                 TtsSpeaker.stopCurrent(applicationContext)
                 var lastToast = 0L
-                val text = PdfReader.extract(applicationContext, uri) { done, total ->
-                    val now = System.currentTimeMillis()
-                    if (now - lastToast > 8000 && done < total) {
-                        lastToast = now
-                        mainHandler.post { Toast.makeText(applicationContext, "PDF: page $done of $total…", Toast.LENGTH_SHORT).show() }
+                val text = DocCache.getOrExtract(applicationContext, uri) {
+                    when (kind) {
+                        "pdf" -> PdfReader.extract(applicationContext, uri) { done, total ->
+                            val now = System.currentTimeMillis()
+                            if (now - lastToast > 8000 && done < total) {
+                                lastToast = now
+                                mainHandler.post { Toast.makeText(applicationContext, "PDF: page $done of $total…", Toast.LENGTH_SHORT).show() }
+                            }
+                        }
+                        "docx" -> DocxReader.extract(applicationContext, uri)
+                        else -> contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+                            ?.let { WebArticleExtractor.extract(it).text }.orEmpty()
                     }
                 }
                 if (text.length < 20) {
-                    mainHandler.post { Toast.makeText(applicationContext, "No readable text found in that PDF", Toast.LENGTH_LONG).show() }
+                    mainHandler.post { Toast.makeText(applicationContext, "No readable text found in that $kind file", Toast.LENGTH_LONG).show() }
                 } else TtsSpeaker.speak(applicationContext, title, text, highlightScreen = false)
             } catch (e: Exception) {
-                Log.e(TAG, "pdf read failed", e)
-                mainHandler.post { Toast.makeText(applicationContext, "Couldn't read that PDF: ${e.message}", Toast.LENGTH_LONG).show() }
+                Log.e(TAG, "$kind read failed", e)
+                mainHandler.post { Toast.makeText(applicationContext, "Couldn't read that file: ${e.message}", Toast.LENGTH_LONG).show() }
             }
-        }.apply { isDaemon = true; name = "PdfRead"; start() }
+        }.apply { isDaemon = true; name = "DocRead"; start() }
     }
 
     /** The provider's real file name (OpenableColumns.DISPLAY_NAME), minus a .txt extension; the URI's last segment as a fallback. */
