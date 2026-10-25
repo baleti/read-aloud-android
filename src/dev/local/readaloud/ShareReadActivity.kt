@@ -54,9 +54,10 @@ class ShareReadActivity : Activity() {
         val docName = fileUri?.let { displayNameOf(it) }.orEmpty()
         val mime = fileUri?.let { intent?.type ?: contentResolver.getType(it) }.orEmpty()
         val isDocx = fileUri != null && (mime.contains("wordprocessingml") || docName.endsWith(".docx", true))
-        val isHtml = fileUri != null && !isPdf && !isDocx && (mime == "text/html" || docName.endsWith(".html", true) || docName.endsWith(".htm", true))
-        if (fileUri != null && (isPdf || isDocx || isHtml)) {
-            readDocument(fileUri, if (isPdf) "pdf" else if (isDocx) "docx" else "html")
+        val isPptx = fileUri != null && (mime.contains("presentationml.presentation") || docName.endsWith(".pptx", true))
+        val isHtml = fileUri != null && !isPdf && !isDocx && !isPptx && (mime == "text/html" || docName.endsWith(".html", true) || docName.endsWith(".htm", true))
+        if (fileUri != null && (isPdf || isDocx || isPptx || isHtml)) {
+            readDocument(fileUri, if (isPdf) "pdf" else if (isDocx) "docx" else if (isPptx) "pptx" else "html")
             finish()
             return
         }
@@ -105,9 +106,9 @@ class ShareReadActivity : Activity() {
         finish()
     }
 
-    /** PDF (OCR), DOCX or HTML file -> text, then speaks it. Extraction is cached by file checksum (DocCache). */
+    /** PDF (OCR), DOCX, PPTX or HTML file -> text, then speaks it. Extraction is cached by file checksum (DocCache). */
     private fun readDocument(uri: Uri, kind: String) {
-        val title = (displayNameOf(uri) ?: kind.uppercase()).replace(Regex("\\.(pdf|docx|html?)$", RegexOption.IGNORE_CASE), "")
+        val title = (displayNameOf(uri) ?: kind.uppercase()).replace(Regex("\\.(pdf|docx|pptx|html?)$", RegexOption.IGNORE_CASE), "")
         Toast.makeText(this, if (kind == "pdf") "Reading PDF (this takes a moment)…" else "Reading…", Toast.LENGTH_LONG).show()
         Thread {
             try {
@@ -123,6 +124,7 @@ class ShareReadActivity : Activity() {
                             }
                         }
                         "docx" -> DocxReader.extract(applicationContext, uri)
+                        "pptx" -> PptxReader.extract(applicationContext, uri)
                         else -> contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
                             ?.let { WebArticleExtractor.extract(it).text }.orEmpty()
                     }
