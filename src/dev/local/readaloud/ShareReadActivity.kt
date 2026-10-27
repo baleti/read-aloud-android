@@ -34,6 +34,7 @@ class ShareReadActivity : Activity() {
     companion object {
         private const val TAG = "ShareReadActivity"
         private val ANY_URL = Regex("""https?://\S+""")
+        private const val LINK_SHARE_MAX_EXTRA_CHARS = 200
         private val URL_PATTERN = Regex("""https?://\S*reddit\.com/\S+""")
     }
 
@@ -75,8 +76,11 @@ class ShareReadActivity : Activity() {
             return
         }
         val isFile = fileUri != null && fileName != null
-        val redditUrl = if (isFile) null else URL_PATTERN.find(sharedText)?.value
-        val anyUrl = if (isFile) null else ANY_URL.find(sharedText)?.value
+        // Only a share that is essentially a link ("Title https://...") is fetched. A long text that merely
+        // contains links (a copied ChatGPT answer with citations) is the content itself and is read as-is.
+        val isLinkShare = !isFile && sharedText.replace(ANY_URL, "").trim().length <= LINK_SHARE_MAX_EXTRA_CHARS
+        val redditUrl = if (isLinkShare) URL_PATTERN.find(sharedText)?.value else null
+        val anyUrl = if (isLinkShare) ANY_URL.find(sharedText)?.value else null
         // Signal-style content URIs end in an opaque id ("…/attachment/5287"), so a file with no real name
         // gets a title from its first line instead.
         val subject = fileName?.takeIf { !it.matches(Regex("\\d+")) }
