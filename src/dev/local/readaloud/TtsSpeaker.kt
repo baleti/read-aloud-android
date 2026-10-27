@@ -230,7 +230,7 @@ object TtsSpeaker {
         // replacing this listener before this one's session ends is
         // harmless: this session's own overlay calls simply stop, which
         // is correct anyway since it's been superseded.
-        OverlayIndicator.show("Read Aloud: generating audio…")
+        ReadStatus.show("Read Aloud: generating audio…")
         svc.setListener(object : TtsPlaybackService.HighlightListener {
             override fun onSentenceStart(text: String, words: List<WordTiming>, startMs: Long) {
                 ReadAlongState.words = words
@@ -238,14 +238,14 @@ object TtsSpeaker {
                 ReadAlongState.sentence = text
                 ReadAlongState.sentenceSeq++
                 ReadAlongState.noteSentence(text, words, startMs)
-                OverlayIndicator.hide()
+                ReadStatus.hide()
             }
             override fun onWordHighlight(wordIndex: Int) { ReadAlongState.wordIdx = wordIndex }
             override fun onSentenceEnd() {
-                OverlayIndicator.show("Read Aloud: generating audio…")
+                ReadStatus.show("Read Aloud: generating audio…")
             }
             override fun onQueueIdle() {
-                OverlayIndicator.hide()
+                ReadStatus.hide()
             }
         })
 
@@ -267,9 +267,7 @@ object TtsSpeaker {
         }
         ReadAlongState.sections.add(svc.enqueuedEndMs())
         if (!continueSession && jumpToOffset < 0) {
-            val a11y = ReadAloudAccessibilityService.instance
-            if (!highlightScreen) { ReadOverlay.hide(); PlayerActivity.launch(context.applicationContext) }
-            else if (a11y != null) ReadOverlay.show(a11y) else PlayerActivity.launch(context.applicationContext)
+            PlayerActivity.launch(context.applicationContext)
         }
         val wordCount = text.split(Regex("\\s+")).count { it.isNotBlank() }
         val chunkEstimateMs = (wordCount / (160.0 / 60.0) * 1000).toLong()
@@ -463,12 +461,12 @@ object TtsSpeaker {
                 val obj = JSONObject(msg)
                 when (obj.optString("type")) {
                     "sentence" -> pendingMeta = obj
-                    "status" -> OverlayIndicator.addStatus(obj.optString("message"), obj.optInt("sentence"), obj.optInt("of"))
+                    "status" -> ReadStatus.addStatus(obj.optString("message"), obj.optInt("sentence"), obj.optInt("of"))
                     "done" -> {
                         doneReceived = true
                         // Everything was either enqueued by the server or
                         // already covered by local audio.
-                        active.set(false); if (!keepOpen) svc.endSession(); ws.close(); OverlayIndicator.hide()
+                        active.set(false); if (!keepOpen) svc.endSession(); ws.close(); ReadStatus.hide()
                     }
                     "error" -> {
                         Log.e(TAG, "server error: ${obj.optString("message")}")

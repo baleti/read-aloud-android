@@ -1,18 +1,14 @@
 # Read Aloud
 
-Reads whatever app is currently on screen, aloud - invoked from
-[digital-assistant-android](https://github.com/baleti/digital-assistant-android)'s long-press-power
-action menu (the "Complete action using" overlay Android shows for its
-Digital Assistant app slot), not from an icon you tap. Built with Gradle
-(the only app in this family that needs it - see below); everything else
-here is zero-dependency, same as the sibling repos.
+Reads shared content aloud. Pick "Read Aloud" in Android's Share sheet (or "Open with") for text,
+a link (fetched and reduced to its article text), a PDF, DOCX or PPTX; a Reddit thread link is
+read from its `.rss` feed. Audio comes from the shared TTS server, with a local fallback.
+Built with Gradle.
 
-A generic engine reads any app's accessibility tree in on-screen order;
-a small per-app profile registry (`AppProfile.kt`) overrides that for
-apps that need real work - Gmail's open-email footer noise, Reddit's
-opaque Compose UI. Add a profile object, register it, nothing else
-changes. Full design rationale, the real bugs found getting this working
-at all, and per-app findings are in [docs/design.md](docs/design.md).
+**Removed 2026-10-27:** the accessibility-service "read whatever is on screen" feature (per-app
+profiles for Gmail, Outlook, WhatsApp, Reddit, browsers, the scroll reader, the highlight overlay
+and the Digital Assistant trigger) never worked reliably. It lives in git history (the commit
+before "Remove screen reading"); the docs below describing it are historical.
 
 ## Status (2026-09-13)
 

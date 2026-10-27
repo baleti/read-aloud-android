@@ -221,8 +221,6 @@ class PlayerActivity : Activity() {
         bindService(Intent(this, TtsPlaybackService::class.java), connection, Context.BIND_AUTO_CREATE)
     }
 
-    override fun onResume() { super.onResume(); OverlayIndicator.suppress(true); ReadOverlay.setSuppressed(true) }
-    override fun onPause() { OverlayIndicator.suppress(false); ReadOverlay.setSuppressed(false); super.onPause() }
 
     override fun onDestroy() {
         handler.removeCallbacks(tick)
@@ -357,7 +355,7 @@ class PlayerActivity : Activity() {
             return
         }
         idleTicks = 0
-        OverlayIndicator.statusLine().let { statusView.text = it ?: ""; statusView.visibility = if (it == null) View.GONE else View.VISIBLE }
+        ReadStatus.statusLine().let { statusView.text = it ?: ""; statusView.visibility = if (it == null) View.GONE else View.VISIBLE }
         titleView.text = s.currentTitle()
         updateReadAlong()
         setIcon(playPause, if (s.isPlaying()) "ic_pause" else "ic_play")

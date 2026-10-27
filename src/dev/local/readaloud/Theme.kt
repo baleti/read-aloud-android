@@ -6,7 +6,7 @@ import android.graphics.drawable.RippleDrawable
 
 /**
  * Same palette as digital-assistant-android's own Theme.kt (a snapshot of the
- * desktop's generated scheme) - used here only by ModeChooserActivity, to
+ * desktop's generated scheme) (kept for the player UI), to
  * match digital-assistant-android's own action-menu look rather than inventing a
  * second style for what's effectively the same kind of menu, just shown
  * from a different app.

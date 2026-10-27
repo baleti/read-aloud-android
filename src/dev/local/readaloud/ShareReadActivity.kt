@@ -158,17 +158,6 @@ class ShareReadActivity : Activity() {
         return if (line.length > 70) line.take(70).trimEnd() + "…" else line
     }
 
-    /** Pages a fetch can't see (claude.ai artifacts live in a cross-origin, login/Cloudflare-gated iframe):
-     * the share came from a browser showing the page, so read what's on screen instead. */
-    private fun readScreenInstead(why: String): Boolean {
-        val a11y = ReadAloudAccessibilityService.instance ?: return false
-        Log.i(TAG, "reading the screen instead: $why")
-        mainHandler.post { Toast.makeText(applicationContext, "Reading the page on screen…", Toast.LENGTH_SHORT).show() }
-        Thread.sleep(700) // let the share sheet close and the browser come back to the foreground
-        a11y.startReading()
-        return true
-    }
-
     private fun fetchPageAndSpeak(url: String) {
         var fetched = WebArticleExtractor.fetch(url)
         // A plain fetch of a JavaScript-rendered site returns an empty shell: render it in a WebView instead.
@@ -178,7 +167,6 @@ class ShareReadActivity : Activity() {
         }
         val page = fetched
         if (page == null || page.text.length < 40) {
-            if (readScreenInstead("no text from fetch")) return
             mainHandler.post { Toast.makeText(applicationContext, "Couldn't get readable text from that page", Toast.LENGTH_LONG).show() }
             return
         }

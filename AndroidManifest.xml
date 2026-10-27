@@ -109,56 +109,6 @@
             </intent-filter>
         </activity>
 
-        <!-- Shown by ReadAloudAccessibilityService itself (not started
-             from digital-assistant-android - it has no way to know in advance
-             whether the foreground app's profile offers more than one
-             mode) when the detected profile has multiple modes for the
-             current screen. taskAffinity=""/singleInstance for the same
-             reason digital-assistant-android's AssistActivity needs them: confirmed
-             live there that without these, a translucent overlay
-             Activity can end up sharing a task with another of this
-             app's own activities and show THAT dimmed behind it instead
-             of the real foreground app. -->
-        <activity
-            android:name=".ModeChooserActivity"
-            android:exported="false"
-            android:excludeFromRecents="true"
-            android:taskAffinity=""
-            android:launchMode="singleInstance"
-            android:theme="@style/TranslucentOverlay" />
-
-        <!-- Multi-select follow-up to ModeChooserActivity's "Read
-             selected" option, for a Gmail thread grouping multiple
-             messages into one conversation entry - see its own doc. -->
-        <activity
-            android:name=".MessagePickerActivity"
-            android:exported="false"
-            android:excludeFromRecents="true"
-            android:taskAffinity=""
-            android:launchMode="singleInstance"
-            android:theme="@style/TranslucentOverlay" />
-
-        <!-- The trigger: digital-assistant-android's AssistActivity (the long-press-
-             power action menu) sends this broadcast when "Read Aloud" is
-             tapped there. Exported and permission-less deliberately - it
-             carries no data (the receiver reads whatever app is currently
-             foregrounded itself via the accessibility service, it isn't
-             told), so there's nothing to protect by locking it down, and
-             locking it down would mean coordinating a shared signing key
-             or permission declaration between two independently-built
-             apps for no real benefit. Any app on the device could send
-             this broadcast and trigger a read of the current screen -
-             equivalent in effect to a very slow, screen-reader-shaped
-             version of the volume/brightness broadcasts every app can
-             already send. -->
-        <receiver
-            android:name=".TriggerReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="dev.local.readaloud.action.READ_CURRENT_SCREEN" />
-            </intent-filter>
-        </receiver>
-
         <!-- Music-player screen opened whenever a read starts (see its doc).
              singleTask so every new read reuses the one player instead of stacking. -->
         <activity
@@ -171,32 +121,6 @@
             android:name=".TtsPlaybackService"
             android:foregroundServiceType="mediaPlayback"
             android:exported="false" />
-
-        <!-- Accessibility service: the reader. Needs canPerformGestures
-             (scroll/tap "N more replies" in apps like Reddit whose real
-             content isn't all present as addressable nodes) and
-             canRequestFilterKeyEvents (volume-key skip controls while
-             reading) in addition to the base canRetrieveWindowContent -
-             deliberately NOT canRequestTouchExplorationMode, which is
-             what would hijack normal tap behavior system-wide the way
-             enabling TalkBack does; this service stays completely inert
-             until TriggerReceiver calls its own startReading(). Must be
-             enabled by hand in Settings, then
-             Accessibility - no way around that, same as any accessibility
-             service on any Android device (digital-assistant-android's own
-             AssistantAccessibilityService has the identical requirement). -->
-        <service
-            android:name=".ReadAloudAccessibilityService"
-            android:label="Read Aloud"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
-        </service>
 
     </application>
 </manifest>
