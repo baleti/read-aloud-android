@@ -391,6 +391,7 @@ class TtsPlaybackService : Service() {
     fun resume() {
         if (finishedReading) {
             finishedReading = false
+            hasActiveSession = true // a controller closes itself when this is false
             userPaused = false
             seekTo(0L)
             updateNotification(lastSentenceText)
