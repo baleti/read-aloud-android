@@ -186,7 +186,7 @@ class PlayerActivity : Activity() {
         }
 
         playPause = icon("ic_play", 56) {
-            svc?.let { if (it.hasActiveSession()) { if (it.isPlaying()) it.pause() else it.resume() } else resumeSaved() }
+            svc?.let { if (it.hasActiveSession() || it.isFinished()) { if (it.isPlaying()) it.pause() else it.resume() } else resumeSaved() }
         }
         speedBtn = TextView(this).apply {
             text = "1x"; textSize = 16f; setTextColor(Theme.onBackground); gravity = Gravity.CENTER
@@ -331,7 +331,7 @@ class PlayerActivity : Activity() {
 
     private fun refresh() {
         val s = svc ?: return
-        val active = s.hasActiveSession()
+        val active = s.hasActiveSession() || s.isFinished()
         if (active) everActive = true
         updateResumeButton(!active)
         if (!active && !everActive && ReadAlongState.fullText.isNotEmpty()) {

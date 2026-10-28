@@ -127,6 +127,12 @@ class TtsPlaybackService : Service() {
     // any one Activity by design (foreground service + real notification),
     // so it's the only thing that reliably knows.
     @Volatile private var hasActiveSession = false
+
+    // True once a session read through to its end on its own. The buffer is
+    // kept and the media session sits paused at the start, so a bare
+    // play/pause press (e.g. headphone button) replays from the beginning -
+    // see resume().
+    @Volatile private var finishedReading = false
     @Volatile private var stopRequested = false
     @Volatile private var idleSignaled = true
     // Distinguishes "nothing left to play right now because the network is
@@ -278,6 +284,7 @@ class TtsPlaybackService : Service() {
         pausedByFocusLoss = false
         sessionGeneration++ // invalidate any onQueueIdle already queued from a stop before this
         hasActiveSession = true
+        finishedReading = false
         requestAudioFocus()
         currentTitle = title
         stopRequested = false
@@ -382,6 +389,13 @@ class TtsPlaybackService : Service() {
     }
 
     fun resume() {
+        if (finishedReading) {
+            finishedReading = false
+            userPaused = false
+            seekTo(0L)
+            updateNotification(lastSentenceText)
+            return
+        }
         userPaused = false
         requestAudioFocus()
         setPositionAnchor(estimatedPositionMs(), true)
@@ -422,6 +436,10 @@ class TtsPlaybackService : Service() {
      * this to tell whether there's a background session worth reflecting
      * in its own UI at all. */
     fun hasActiveSession(): Boolean = hasActiveSession
+
+    /** True after a read ended on its own and is wound back to the start,
+     * waiting for play (see finishedReading). Not an active session. */
+    fun isFinished(): Boolean = finishedReading
 
     /** End (ms, on the same timeline as getPositionMs) of everything enqueued so far. */
     fun enqueuedEndMs(): Long = synchronized(lock) { positionMsUpTo(allSentences.size) }
@@ -525,6 +543,7 @@ class TtsPlaybackService : Service() {
         }
         seekGeneration++
         sessionEnded = false // a fresh stream is about to start - not done yet
+        finishedReading = false
         idleSignaled = false
         requestAudioFocus()
         audioTrack?.let { try { it.pause(); it.flush(); framesWritten = 0L } catch (_: Exception) {} }
@@ -612,6 +631,12 @@ class TtsPlaybackService : Service() {
                     idleSignaled = true
                     hasActiveSession = false
                     abandonAudioFocus() // reading finished on its own - hand focus back
+                    // Wind back to the start, paused: next play press replays.
+                    finishedReading = true
+                    setPlaying(false)
+                    setPositionAnchor(positionBaseMs, false)
+                    updatePlaybackState(PlaybackState.STATE_PAUSED, positionBaseMs)
+                    mainHandler.post { updateNotification(lastSentenceText) }
                     val myGen = sessionGeneration
                     mainHandler.post { if (sessionGeneration == myGen) listener?.onQueueIdle() }
                 }
