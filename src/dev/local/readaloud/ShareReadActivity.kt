@@ -36,6 +36,9 @@ class ShareReadActivity : Activity() {
         private val ANY_URL = Regex("""https?://\S+""")
         private const val LINK_SHARE_MAX_EXTRA_CHARS = 200
         private val URL_PATTERN = Regex("""https?://\S*reddit\.com/\S+""")
+        /** Bumped per document read; a streaming PDF read that sees a newer value has been superseded. */
+        @Volatile private var readGeneration = 0
+        private val PDF_DONE = String()
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -113,10 +116,12 @@ class ShareReadActivity : Activity() {
     /** PDF (OCR), DOCX, PPTX or HTML file -> text, then speaks it. Extraction is cached by file checksum (DocCache). */
     private fun readDocument(uri: Uri, kind: String) {
         val title = (displayNameOf(uri) ?: kind.uppercase()).replace(Regex("\\.(pdf|docx|pptx|html?)$", RegexOption.IGNORE_CASE), "")
-        Toast.makeText(this, if (kind == "pdf") "Reading PDF (this takes a moment)…" else "Reading…", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, if (kind == "pdf") "Reading PDF (starts after the first page)…" else "Reading…", Toast.LENGTH_LONG).show()
         Thread {
             try {
+                val gen = ++readGeneration
                 TtsSpeaker.stopCurrent(applicationContext)
+                if (kind == "pdf" && streamPdf(uri, title, gen)) return@Thread
                 var lastToast = 0L
                 val text = DocCache.getOrExtract(applicationContext, uri) {
                     when (kind) {
@@ -141,6 +146,60 @@ class ShareReadActivity : Activity() {
                 mainHandler.post { Toast.makeText(applicationContext, "Couldn't read that file: ${e.message}", Toast.LENGTH_LONG).show() }
             }
         }.apply { isDaemon = true; name = "DocRead"; start() }
+    }
+
+    /**
+     * Uncached PDF: OCR pages on a background thread and speak page 1 as soon as it is ready, appending
+     * each later page to the same playback session. Returns false (nothing spoken) when the PDF is already
+     * cached, so the caller takes the normal whole-text path.
+     */
+    private fun streamPdf(uri: Uri, title: String, gen: Int): Boolean {
+        val ctx = applicationContext
+        val sum = DocCache.checksum(ctx, uri)
+        if (sum != null && DocCache.get(ctx, sum) != null) return false
+
+        val pages = java.util.concurrent.LinkedBlockingQueue<String>()
+        val failure = arrayOfNulls<Exception>(1)
+        val t0 = System.currentTimeMillis()
+        Thread {
+            try {
+                PdfReader.extractPages(ctx, uri, onPage = { pages.put(it); gen == readGeneration })
+            } catch (e: Exception) { failure[0] = e } finally { pages.put(PDF_DONE) }
+        }.apply { isDaemon = true; name = "PdfOcr"; start() }
+
+        val all = StringBuilder()
+        var started = false
+        try {
+            while (gen == readGeneration) {
+                val page = pages.take()
+                if (page === PDF_DONE) break
+                if (!started) {
+                    started = true
+                    ReadAlongState.streaming = true
+                    all.append(page)
+                    TtsSpeaker.speak(ctx, title, page, highlightScreen = false, keepOpen = true)
+                } else {
+                    // The user stopped playback from the player: stop OCRing the rest.
+                    if (!TtsSpeaker.sessionActive(ctx)) { readGeneration++; break }
+                    all.append("\n\n").append(page)
+                    TtsSpeaker.speak(ctx, title, page, continueSession = true, keepOpen = true, highlightScreen = false)
+                }
+            }
+        } finally {
+            if (gen == readGeneration) {
+                ReadAlongState.streaming = false
+                if (started) TtsSpeaker.finishOpenSession(ctx)
+            } else ReadAlongState.streaming = false
+        }
+        if (gen == readGeneration) {
+            if (!started) {
+                val msg = failure[0]?.let { "Couldn't read that file: ${it.message}" } ?: "No readable text found in that pdf file"
+                mainHandler.post { Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show() }
+            } else if (sum != null && failure[0] == null && System.currentTimeMillis() - t0 >= 3_000L) {
+                DocCache.put(ctx, sum, all.toString())
+            }
+        }
+        return true
     }
 
     /** The provider's real file name (OpenableColumns.DISPLAY_NAME), minus a .txt extension; the URI's last segment as a fallback. */

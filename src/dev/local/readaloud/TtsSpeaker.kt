@@ -121,6 +121,25 @@ object TtsSpeaker {
         }
     }
 
+    /** True while a playback session exists (a keepOpen one stays so until stopped); false once the user stopped it. */
+    fun sessionActive(context: Context): Boolean {
+        var svc: TtsPlaybackService? = null
+        val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                svc = (binder as TtsPlaybackService.LocalBinder).service()
+            }
+            override fun onServiceDisconnected(name: ComponentName?) {}
+        }
+        return try {
+            context.bindService(Intent(context, TtsPlaybackService::class.java), connection, Context.BIND_AUTO_CREATE)
+            var waited = 0
+            while (svc == null && waited < 1000) { Thread.sleep(20); waited += 20 }
+            svc?.hasActiveSession() == true
+        } catch (e: Exception) { false } finally {
+            try { context.unbindService(connection) } catch (_: Exception) {}
+        }
+    }
+
     fun stopCurrent(context: Context) {
         closeActiveWs()
         var svc: TtsPlaybackService? = null

@@ -20,8 +20,17 @@ object PdfReader {
 
     /** Blocking; call off the main thread. [onProgress] gets (pagesDone, pageCount). */
     fun extract(context: Context, uri: Uri, onProgress: (Int, Int) -> Unit = { _, _ -> }): String {
-        val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return ""
         val sb = StringBuilder()
+        extractPages(context, uri, onProgress) { sb.append(it).append("\n\n"); true }
+        return sb.toString().trim()
+    }
+
+    /**
+     * Like [extract] but hands each page's text to [onPage] as soon as it is recognised, so reading can
+     * start after page 1. [onPage] returns false to abort the remaining pages. Blank pages are skipped.
+     */
+    fun extractPages(context: Context, uri: Uri, onProgress: (Int, Int) -> Unit = { _, _ -> }, onPage: (String) -> Boolean) {
+        val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return
         pfd.use {
             PdfRenderer(it).use { renderer ->
                 val n = minOf(renderer.pageCount, MAX_PAGES)
@@ -33,13 +42,12 @@ object PdfReader {
                         page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                         val text = MlKitOcr.recognize(bmp, 20_000).trim()
                         bmp.recycle()
-                        if (text.isNotEmpty()) sb.append(text).append("\n\n")
+                        if (text.isNotEmpty() && !onPage(text)) return
                     }
                     onProgress(i + 1, n)
                     Log.d(TAG, "page ${i + 1}/$n")
                 }
             }
         }
-        return sb.toString().trim()
     }
 }

@@ -36,6 +36,11 @@ object DocCache {
         return f.readText()
     }
 
+    fun put(ctx: Context, sum: String, text: String) {
+        File(dir(ctx), "$sum.txt").writeText(text)
+        dir(ctx).listFiles()?.sortedBy { it.lastModified() }?.dropLast(MAX_FILES)?.forEach { it.delete() }
+    }
+
     /** Runs [extract] unless [uri]'s content was extracted before; stores the result if it was slow. */
     fun getOrExtract(ctx: Context, uri: Uri, extract: () -> String): String {
         val sum = checksum(ctx, uri) ?: return extract()
@@ -43,8 +48,7 @@ object DocCache {
         val t0 = System.currentTimeMillis()
         val text = extract()
         if (text.isNotBlank() && System.currentTimeMillis() - t0 >= MIN_COST_MS) {
-            File(dir(ctx), "$sum.txt").writeText(text)
-            dir(ctx).listFiles()?.sortedBy { it.lastModified() }?.dropLast(MAX_FILES)?.forEach { it.delete() }
+            put(ctx, sum, text)
         }
         return text
     }
