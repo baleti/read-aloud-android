@@ -349,9 +349,11 @@ class PlayerActivity : Activity() {
             return
         }
         if (!active) {
-            // Session over (finished or stopped elsewhere): show it, linger a bit, then close.
+            // Session over (finished, stopped elsewhere, or the service was destroyed after a long idle
+            // pause): keep the saved document and its Resume button on screen rather than closing.
+            // Only a screen read, which has no text to resume, lingers a bit and closes.
             setIcon(playPause, "ic_play")
-            if (++idleTicks > 4) finish()
+            if (!ReadAlongState.persisting && ReadAlongState.fullText.isEmpty() && ++idleTicks > 4) finish()
             return
         }
         idleTicks = 0
