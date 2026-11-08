@@ -47,6 +47,9 @@ object TtsSpeaker {
     // takes ~1-3s the first time, so call warmUp() early (the accessibility
     // service does at connect time); a speak() before it's ready just runs
     // without the bridge.
+    // Keep this much on-device audio queued ahead of the playhead: engine latency per sentence is
+    // seconds on some phones (cold engine, GC), so a 700ms buffer meant an audible gap every sentence.
+    private const val LOCAL_LOOKAHEAD_MS = 20_000L
     @Volatile private var localTts: LocalTts? = null
 
     fun warmUp(context: Context) {
@@ -353,7 +356,7 @@ object TtsSpeaker {
               try {
                 for ((i, range) in localSentences.withIndex()) {
                     if (!active.get() || serverTookOver) return@Thread
-                    while (i > 0 && active.get() && !serverTookOver && svc.bufferedAheadMs() > 700) Thread.sleep(100)
+                    while (i > 0 && active.get() && !serverTookOver && svc.bufferedAheadMs() > LOCAL_LOOKAHEAD_MS) Thread.sleep(100)
                     if (!active.get() || serverTookOver) return@Thread
                     val sentence = text.substring(range)
                     val audio = local.synthesize(speakableForLocalTts(sentence))
@@ -389,7 +392,7 @@ object TtsSpeaker {
             Thread {
                 while (active.get()) {
                     Thread.sleep(150)
-                    if (!serverTookOver || !svc.isPlaying() || svc.bufferedAheadMs() > 400) continue
+                    if (!serverTookOver || !svc.isPlaying() || svc.bufferedAheadMs() > 4000) continue
                     val from = synchronized(feedLock) { maxOf(serverCursor, localEnd) }
                     val range = localSentences.firstOrNull { it.last + 1 > from } ?: continue
                     val sentence = text.substring(range)
@@ -436,7 +439,7 @@ object TtsSpeaker {
                     while (active.get()) {
                         val from = synchronized(feedLock) { maxOf(serverCursor, localEnd, skippedTo) }
                         val range = allSentences.firstOrNull { it.last + 1 > from } ?: break
-                        while (active.get() && svc.bufferedAheadMs() > 700) Thread.sleep(100)
+                        while (active.get() && svc.bufferedAheadMs() > LOCAL_LOOKAHEAD_MS) Thread.sleep(100)
                         val sentence = text.substring(range)
                         val audio = engine.synthesize(speakableForLocalTts(sentence))
                             ?: engine.synthesize(speakableForLocalTts(sentence))
