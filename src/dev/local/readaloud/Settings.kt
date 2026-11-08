@@ -15,16 +15,21 @@ import android.content.Context
 object Settings {
     private const val PREFS = "readaloud_prefs"
 
-    const val DEFAULT_HOST = "10.10.0.2"
-    const val DEFAULT_TTS_PORT = 8792
+    // Direct to the ai1 TTS/STT server on host1 (WireGuard hub address 10.10.0.6), no host3 proxy hop.
+    const val DEFAULT_HOST = "10.10.0.6"
+    const val DEFAULT_TTS_PORT = 8100
+    private const val LEGACY_HOST = "10.10.0.2" // host3 newsdigest proxy
+    private const val LEGACY_PORT = 8792
     const val DEFAULT_ENGINE = "kokoro"
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun getHost(context: Context): String = prefs(context).getString("host", DEFAULT_HOST) ?: DEFAULT_HOST
+    fun getHost(context: Context): String =
+        (prefs(context).getString("host", DEFAULT_HOST) ?: DEFAULT_HOST).let { if (it == LEGACY_HOST) DEFAULT_HOST else it }
     fun setHost(context: Context, host: String) = prefs(context).edit().putString("host", host).apply()
 
-    fun getTtsPort(context: Context): Int = prefs(context).getInt("tts_port", DEFAULT_TTS_PORT)
+    fun getTtsPort(context: Context): Int =
+        prefs(context).getInt("tts_port", DEFAULT_TTS_PORT).let { if (it == LEGACY_PORT) DEFAULT_TTS_PORT else it }
     fun setTtsPort(context: Context, port: Int) = prefs(context).edit().putInt("tts_port", port).apply()
 
     fun getTtsEngine(context: Context): String = prefs(context).getString("engine", DEFAULT_ENGINE) ?: DEFAULT_ENGINE
