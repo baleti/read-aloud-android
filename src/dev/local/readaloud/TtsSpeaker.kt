@@ -334,6 +334,9 @@ object TtsSpeaker {
         val feedLock = Any()
         var serverTookOver = false
         var localEnd = 0
+        // Set once any server audio has arrived: the stream is alive, so local stops over-buffering
+        // (a deep local lead would keep the server throttled behind it and Chatterbox would never take over).
+        var serverGotAny = false
         // The accessibility service warms this at connect, but a share into a fresh process
         // (or a tap-to-seek restart) may get here first: start it now and give it a moment, so
         // the fast on-device voice covers the wait for the server's first sentence.
@@ -356,7 +359,7 @@ object TtsSpeaker {
               try {
                 for ((i, range) in localSentences.withIndex()) {
                     if (!active.get() || serverTookOver) return@Thread
-                    while (i > 0 && active.get() && !serverTookOver && svc.bufferedAheadMs() > LOCAL_LOOKAHEAD_MS) Thread.sleep(100)
+                    while (i > 0 && active.get() && !serverTookOver && svc.bufferedAheadMs() > (if (serverGotAny) 1500L else 8_000L)) Thread.sleep(100)
                     if (!active.get() || serverTookOver) return@Thread
                     val sentence = text.substring(range)
                     val audio = local.synthesize(speakableForLocalTts(sentence))
@@ -392,7 +395,7 @@ object TtsSpeaker {
             Thread {
                 while (active.get()) {
                     Thread.sleep(150)
-                    if (!serverTookOver || !svc.isPlaying() || svc.bufferedAheadMs() > 4000) continue
+                    if (!serverTookOver || !svc.isPlaying() || svc.bufferedAheadMs() > 2500) continue
                     val from = synchronized(feedLock) { maxOf(serverCursor, localEnd) }
                     val range = localSentences.firstOrNull { it.last + 1 > from } ?: continue
                     val sentence = text.substring(range)
@@ -509,10 +512,22 @@ object TtsSpeaker {
                     }
                 }
                 val sText = meta.getString("text")
+                serverGotAny = true
                 synchronized(feedLock) {
-                    val at = text.indexOf(sText, serverCursor)
-                    if (at >= 0) serverCursor = at + sText.length
-                    if (at >= 0 && at + sText.length <= localEnd) return // local already spoke it
+                    // Locate this sentence in the source text. The server may normalise it (markdown stripped,
+                    // whitespace collapsed), so fall back to its head, then to "right after the cursor":
+                    // an unlocatable sentence used to be treated as new and was spoken a second time.
+                    val trimmed = sText.trim()
+                    var at = text.indexOf(sText, serverCursor)
+                    var len = sText.length
+                    if (at < 0) { at = text.indexOf(trimmed, serverCursor); len = trimmed.length }
+                    if (at < 0 && trimmed.length > 12) { at = text.indexOf(trimmed.take(12), serverCursor); len = trimmed.length }
+                    if (at < 0) { at = serverCursor; len = trimmed.length }
+                    serverCursor = maxOf(serverCursor, at + len)
+                    // Local audio already covers everything before localEnd. A server sentence that STARTS
+                    // before it (including one straddling the boundary because the two splitters disagreed)
+                    // is dropped: a repeat is worse than a missing half-sentence.
+                    if (at < localEnd) return
                     serverTookOver = true
                     svc.enqueueSentence(sText, words, data, meta.getInt("sample_rate"))
                 }
