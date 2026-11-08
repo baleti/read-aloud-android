@@ -425,8 +425,8 @@ object TtsSpeaker {
             }
         }
         fun startRescue(why: String) {
+            if (doneReceived || !active.get()) return // normal finish: no toast
             notifyFallback(why)
-            if (doneReceived || !active.get()) return
             if (!(serverTookOver || localSentences.isEmpty())) return // the first local thread still covers it
             if (!rescueStarted.compareAndSet(false, true)) return
             Log.w(TAG, "server stream failed ($why): on-device TTS takes over")
